@@ -2563,7 +2563,7 @@ const App = () => {
             </main>
 
             <footer className="mt-12 pt-6 border-t border-gray-700 text-center text-sm text-gray-500 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-4">
-                <p>Real-time data from CometBFT RPC and Cosmos SDK API for Warden Protocol</p>
+                <p>From the Warden Indonesia Community for Warden Protocol</p>
                 <p className="mt-1">Current RPC: {selectedConfig.label}</p>
             </footer>
         </div>
