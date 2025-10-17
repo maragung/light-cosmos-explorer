@@ -2377,7 +2377,7 @@ const App = () => {
     const [searchQuery, setSearchQuery] = useState('');
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
     const [isRpcDropdownOpen, setIsRpcDropdownOpen] = useState(false);
-    const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+    const [isSidebarOpen, setIsSidebarOpen] = useState(false);
     const [isMobile, setIsMobile] = useState(false);
 
     useEffect(() => {
@@ -2689,3 +2689,4 @@ const App = () => {
 };
 
 export default App;
+
