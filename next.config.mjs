@@ -1,8 +1,7 @@
 /** @type {import('next').NextConfig} */
-/** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  swcMinify: true,
+  // Hapus swcMinify
   async rewrites() {
     return [
       {
@@ -13,5 +12,4 @@ const nextConfig = {
   },
 }
 
-
-export default nextConfig;
+export default nextConfig
