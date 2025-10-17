@@ -1159,10 +1159,10 @@ const BlocksList = ({ navigate, cometBftRpcApi, cosmosSdkApi }) => {
         try {
             const latestHeight = await fetchLatestBlockHeight();
             if (!latestHeight) throw new Error('Could not get latest block height');
-            
+
             const minHeight = Math.max(1, latestHeight - 100);
             const blockchainData = await fetchWithRetry(`${cometBftRpcApi}/blockchain?minHeight=${minHeight}&maxHeight=${latestHeight}`);
-            
+
             if (blockchainData.result && blockchainData.result.block_metas) {
                 const blocks = blockchainData.result.block_metas
                     .sort((a, b) => parseInt(b.header.height) - parseInt(a.header.height))
@@ -1602,7 +1602,7 @@ const ValidatorsList = ({ navigate, setModal, cometBftRpcApi, cosmosSdkApi }) =>
     return (
         <div className="p-4">
             <div className="flex justify-between items-center mb-6"><h2 className="text-2xl font-bold text-green-400">Active Validator Set</h2><button onClick={fetchValidators} className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition duration-200 flex items-center"><RefreshCcw className="w-4 h-4 mr-2" /> Refresh</button></div>
-            
+
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
                 <div className="bg-gray-800 p-4 rounded-lg neon-border"><div className="text-sm text-gray-400 mb-1">Total Voting Power</div><div className="text-xl font-bold text-white">{summaryData.totalVotingPower} WARD</div><div className="text-sm text-green-400 mt-1">From {summaryData.totalValidators} Active Validators</div></div>
                 <div className="bg-gray-800 p-4 rounded-lg neon-border"><div className="text-sm text-gray-400 mb-1">Commission Rates</div><div className="text-lg font-bold text-white">Avg: {summaryData.avgCommission}</div><div className="text-sm text-gray-400 mt-1">Weighted: {summaryData.weightedCommission}</div></div>
@@ -1647,7 +1647,12 @@ const ValidatorsList = ({ navigate, setModal, cometBftRpcApi, cosmosSdkApi }) =>
             </div>
             <div className="md:hidden space-y-4">{currentValidators.map((validator, index) => (<div key={validator.address} className="bg-gray-800 shadow-lg rounded-xl p-5 border-t-4 border-green-500 neon-border cursor-pointer" onClick={() => navigate(ROUTES.VALIDATOR_DETAIL, { address: validator.address })}><div className="flex justify-between items-start mb-3"><div><div className="text-xs text-gray-400 mb-1">Rank #{indexOfFirstValidator + index + 1}</div><h2 className="text-xl font-bold text-green-400 hover:text-green-300 transition duration-200">{validator.moniker}</h2><div className="text-xs text-gray-400 font-mono truncate mt-1">{validator.address}</div></div><div className="text-right"><div className="text-xs font-medium text-gray-200 bg-gray-700 px-3 py-1 rounded-full mb-1">{(validator.commission * 100).toFixed(2)}%</div></div></div><div className="space-y-2 text-sm text-gray-300 mb-4"><div className="flex justify-between"><span className="text-gray-400">Voting Power:</span><span className="font-mono">{validator.votingPower} WARD</span></div></div><button onClick={(e) => { e.stopPropagation(); handleDelegate(validator) }} className="w-full py-2 bg-green-600 text-white font-semibold rounded-lg shadow-md hover:bg-green-700 transition duration-300">Delegate</button></div>))}</div>
             {totalPages > 1 && (<div className="flex justify-between items-center mt-6"><button onClick={handlePrevPage} disabled={currentPage === 1} className={`px-4 py-2 rounded ${currentPage === 1 ? 'bg-gray-700 text-gray-500 cursor-not-allowed' : 'bg-green-600 text-white hover:bg-green-700'}`}>Previous</button><span className="text-gray-300">Page {currentPage} of {totalPages}</span><button onClick={handleNextPage} disabled={currentPage === totalPages} className={`px-4 py-2 rounded ${currentPage === totalPages ? 'bg-gray-700 text-gray-500 cursor-not-allowed' : 'bg-green-600 text-white hover:bg-green-700'}`}>Next</button></div>)}
-            {filteredValidators.length === 0 && searchTerm && (<div className="text-center py-8 text-gray-400"><p>No validators found matching "{searchTerm}"</p><p className="text-sm mt-2">Try searching by moniker name or operator address</p></div>)}
+            {filteredValidators.length === 0 && searchTerm && (
+                <div className="text-center py-8 text-gray-400">
+                    <p>{`No validators found matching "${searchTerm}"`}</p>
+                    <p className="text-sm mt-2">Try searching by moniker name or operator address</p>
+                </div>
+            )}
         </div>
     );
 };
@@ -1763,17 +1768,17 @@ const TransactionsList = ({ navigate, cometBftRpcApi, cosmosSdkApi }) => {
     // Fungsi untuk memformat tipe message
     const formatMessageType = (message) => {
         if (!message) return 'Unknown';
-        
+
         // Jika message adalah array, ambil yang pertama
         const msg = Array.isArray(message) ? message[0] : message;
-        
+
         // Ekstrak hanya nama message type tanpa path lengkap
         if (typeof msg === 'string') {
             // Contoh: "/cosmos.evm.vm.v1.MsgEthereumTx" → "MsgEthereumTx"
             const parts = msg.split('.');
             return parts[parts.length - 1];
         }
-        
+
         return 'Unknown';
     };
 
@@ -1786,10 +1791,10 @@ const TransactionsList = ({ navigate, cometBftRpcApi, cosmosSdkApi }) => {
             if (!data.result?.txs) return [];
             return data.result.txs.map((tx) => {
                 const messageEvents = tx.tx_result?.events?.filter(e => e.type === 'message') || [];
-                const messages = messageEvents.flatMap(event => 
+                const messages = messageEvents.flatMap(event =>
                     event.attributes?.filter(attr => attr.key === 'action')?.map(attr => attr.value) || []
                 );
-                
+
                 return {
                     hash: (tx.hash?.startsWith('0x') ? tx.hash.substring(2) : tx.hash) || 'N/A',
                     height: tx.height || 'N/A',
@@ -1814,10 +1819,10 @@ const TransactionsList = ({ navigate, cometBftRpcApi, cosmosSdkApi }) => {
             if (!data.result?.txs) return [];
             return data.result.txs.map((tx) => {
                 const messageEvents = tx.tx_result?.events?.filter(e => e.type === 'message') || [];
-                const messages = messageEvents.flatMap(event => 
+                const messages = messageEvents.flatMap(event =>
                     event.attributes?.filter(attr => attr.key === 'action')?.map(attr => attr.value) || []
                 );
-                
+
                 return {
                     hash: (tx.hash?.startsWith('0x') ? tx.hash.substring(2) : tx.hash) || 'N/A',
                     height: tx.height || 'N/A',
@@ -1881,16 +1886,16 @@ const TransactionsList = ({ navigate, cometBftRpcApi, cosmosSdkApi }) => {
     useEffect(() => { fetchAllData(true) }, [fetchAllData]);
     useEffect(() => {
         let interval;
-        if (autoRefresh) interval = setInterval(async () => { 
-            setIsAutoRefreshing(true); 
-            await fetchAllData(false); 
-            setIsAutoRefreshing(false); 
+        if (autoRefresh) interval = setInterval(async () => {
+            setIsAutoRefreshing(true);
+            await fetchAllData(false);
+            setIsAutoRefreshing(false);
         }, refreshInterval);
         return () => clearInterval(interval);
     }, [autoRefresh, refreshInterval, fetchAllData]);
 
-    const copyHash = (hash, e) => { 
-        e.stopPropagation(); 
+    const copyHash = (hash, e) => {
+        e.stopPropagation();
         navigator.clipboard.writeText(hash);
     };
 
@@ -1920,9 +1925,9 @@ const TransactionsList = ({ navigate, cometBftRpcApi, cosmosSdkApi }) => {
                             Latest: <span className="text-green-400 font-bold">{latestBlockHeight.toLocaleString()}</span>
                         </span>
                     )}
-                    <button 
-                        onClick={() => fetchAllData(true)} 
-                        disabled={initialLoading} 
+                    <button
+                        onClick={() => fetchAllData(true)}
+                        disabled={initialLoading}
                         className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition duration-200 flex items-center disabled:opacity-50"
                     >
                         <RefreshCcw className={`w-4 h-4 mr-2 ${isAutoRefreshing ? 'animate-spin' : ''}`} />
@@ -1966,18 +1971,18 @@ const TransactionsList = ({ navigate, cometBftRpcApi, cosmosSdkApi }) => {
                     <div className="flex items-center space-x-4">
                         <div className="flex items-center space-x-2">
                             <label className="flex items-center space-x-2 text-sm text-gray-300">
-                                <input 
-                                    type="checkbox" 
-                                    checked={autoRefresh} 
-                                    onChange={() => setAutoRefresh(!autoRefresh)} 
-                                    className="form-checkbox h-4 w-4 text-green-600" 
+                                <input
+                                    type="checkbox"
+                                    checked={autoRefresh}
+                                    onChange={() => setAutoRefresh(!autoRefresh)}
+                                    className="form-checkbox h-4 w-4 text-green-600"
                                 />
                                 <span>Auto refresh</span>
                             </label>
                             {autoRefresh && (
-                                <select 
-                                    value={refreshInterval} 
-                                    onChange={(e) => setRefreshInterval(Number(e.target.value))} 
+                                <select
+                                    value={refreshInterval}
+                                    onChange={(e) => setRefreshInterval(Number(e.target.value))}
                                     className="px-2 py-1 bg-gray-700 text-white text-sm rounded-lg border border-gray-600"
                                 >
                                     <option value={1000}>1s</option>
@@ -2000,8 +2005,8 @@ const TransactionsList = ({ navigate, cometBftRpcApi, cosmosSdkApi }) => {
                     <div className="bg-red-900 border border-red-700 text-red-200 p-4 rounded-lg">
                         <p className="font-semibold">Failed to load data</p>
                         <p className="text-sm mt-1">{error}</p>
-                        <button 
-                            onClick={() => fetchAllData(true)} 
+                        <button
+                            onClick={() => fetchAllData(true)}
                             className="mt-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition duration-200"
                         >
                             Try Again
@@ -2026,16 +2031,16 @@ const TransactionsList = ({ navigate, cometBftRpcApi, cosmosSdkApi }) => {
                                     <tr key={index} className="hover:bg-gray-750 transition duration-150">
                                         <td className="px-4 py-2">
                                             <div className="flex items-center group">
-                                                <span 
-                                                    className="text-sm font-mono text-green-400 cursor-pointer hover:text-green-300 break-all max-w-[200px] truncate" 
+                                                <span
+                                                    className="text-sm font-mono text-green-400 cursor-pointer hover:text-green-300 break-all max-w-[200px] truncate"
                                                     onClick={() => navigate(ROUTES.TX_DETAIL, { hash: tx.hash })}
                                                     title={tx.hash}
                                                 >
                                                     {tx.hash}
                                                 </span>
-                                                <button 
-                                                    onClick={(e) => copyHash(tx.hash, e)} 
-                                                    className="ml-2 p-1 text-gray-400 hover:text-green-400 hover:bg-gray-600 rounded opacity-0 group-hover:opacity-100 transition-all duration-200" 
+                                                <button
+                                                    onClick={(e) => copyHash(tx.hash, e)}
+                                                    className="ml-2 p-1 text-gray-400 hover:text-green-400 hover:bg-gray-600 rounded opacity-0 group-hover:opacity-100 transition-all duration-200"
                                                     title="Copy hash"
                                                 >
                                                     <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -2052,7 +2057,7 @@ const TransactionsList = ({ navigate, cometBftRpcApi, cosmosSdkApi }) => {
                                         <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-300 max-w-[200px] truncate">
                                             {formatMessageType(tx.messages)}
                                         </td>
-                                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-300 cursor-pointer hover:text-green-300" 
+                                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-300 cursor-pointer hover:text-green-300"
                                             onClick={() => navigate(ROUTES.BLOCKS_DETAIL, { height: tx.height })}>
                                             {parseInt(tx.height).toLocaleString()}
                                         </td>
@@ -2063,7 +2068,7 @@ const TransactionsList = ({ navigate, cometBftRpcApi, cosmosSdkApi }) => {
                                 ))}
                             </tbody>
                         </table>
-                        
+
                         {isLoadingMore && visibleTxs.length < txs.length && (
                             <div className="text-center py-4">
                                 <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-green-400 mx-auto mb-2"></div>
@@ -2078,8 +2083,8 @@ const TransactionsList = ({ navigate, cometBftRpcApi, cosmosSdkApi }) => {
                         <p className="text-sm text-gray-400 mb-2">
                             Showing {visibleTxs.length} transactions from last 25 blocks
                         </p>
-                        <button 
-                            onClick={() => navigate(ROUTES.TXS)} 
+                        <button
+                            onClick={() => navigate(ROUTES.TXS)}
                             className="px-4 py-2 bg-gray-700 text-gray-300 rounded-lg hover:bg-gray-600 transition duration-200 text-sm"
                         >
                             View All Transactions
@@ -2470,8 +2475,8 @@ const App = () => {
                         <h3 className="text-xl font-bold text-green-400 mb-3">{modal.title}</h3>
                         <p className="text-gray-200 mb-5 whitespace-pre-wrap">{modal.message}</p>
                         <div className="text-right">
-                            <button 
-                                onClick={() => setModalState({ isOpen: false, title: '', message: '' })} 
+                            <button
+                                onClick={() => setModalState({ isOpen: false, title: '', message: '' })}
                                 className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition duration-200"
                             >
                                 Close
@@ -2480,7 +2485,7 @@ const App = () => {
                     </div>
                 </div>
             )}
-            
+
             {/* Sidebar */}
             <div className={`bg-gray-800 shadow-xl border-r border-gray-700 transition-all duration-300 ${isSidebarOpen ? (isMobile ? 'fixed inset-y-0 left-0 w-64 z-40' : 'w-64') : 'w-20'} ${isMobile && !isSidebarOpen ? 'hidden' : ''}`}>
                 {isMobile && isSidebarOpen && (
@@ -2493,8 +2498,8 @@ const App = () => {
                             {isSidebarOpen && (
                                 <h1 className="text-xl font-extrabold text-green-400">Warden Explorer</h1>
                             )}
-                            <button 
-                                onClick={() => setIsSidebarOpen(!isSidebarOpen)} 
+                            <button
+                                onClick={() => setIsSidebarOpen(!isSidebarOpen)}
                                 className="p-2 rounded-lg bg-gray-700 text-gray-300 hover:bg-gray-600 transition duration-200"
                             >
                                 <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -2507,16 +2512,16 @@ const App = () => {
                             </button>
                         </div>
                     </div>
-                    
+
                     {/* Navigation Menu */}
                     <nav className="p-4 space-y-2 flex-1">
                         {menuItems.map(({ label, route, icon: Icon }) => (
-                            <button 
-                                key={route} 
-                                onClick={() => { 
-                                    navigate(route); 
-                                    if (isMobile) setIsSidebarOpen(false); 
-                                }} 
+                            <button
+                                key={route}
+                                onClick={() => {
+                                    navigate(route);
+                                    if (isMobile) setIsSidebarOpen(false);
+                                }}
                                 className={`flex items-center w-full px-3 py-4 rounded-lg font-medium transition duration-200 ${currentRoute === route ? 'bg-green-600 text-white shadow-md' : 'text-gray-300 hover:bg-gray-700'}`}
                             >
                                 {/* Icon tetap besar w-6 h-6 meskipun sidebar tertutup */}
@@ -2525,7 +2530,7 @@ const App = () => {
                             </button>
                         ))}
                     </nav>
-                    
+
                     {/* Footer Sidebar */}
                     {isSidebarOpen && (
                         <div className="p-4 border-t border-gray-700">
@@ -2547,11 +2552,11 @@ const App = () => {
                     <div className="px-6 py-4">
                         <div className="flex flex-col md:flex-row justify-between items-center space-y-4 md:space-y-0">
                             <div className="flex items-center space-x-4">
-                                <button 
-                                    onClick={() => { 
-                                        if (isMobile) setIsSidebarOpen(true); 
-                                        else setIsMobileMenuOpen(!isMobileMenuOpen); 
-                                    }} 
+                                <button
+                                    onClick={() => {
+                                        if (isMobile) setIsSidebarOpen(true);
+                                        else setIsMobileMenuOpen(!isMobileMenuOpen);
+                                    }}
                                     className="md:hidden p-2 rounded-lg bg-gray-700 text-gray-300 hover:bg-gray-600 transition duration-200"
                                 >
                                     <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -2563,34 +2568,34 @@ const App = () => {
                                     </svg>
                                 </button>
                             </div>
-                            
+
                             {/* Search Bar */}
                             <div className="flex-1 max-w-2xl mx-4">
                                 <div className="relative">
-                                    <input 
-                                        type="text" 
-                                        value={searchQuery} 
-                                        onChange={(e) => setSearchQuery(e.target.value)} 
-                                        onKeyPress={handleKeyPress} 
-                                        placeholder="Search by Height / Transaction Hash / Account Address" 
-                                        className="w-full px-4 py-2 pl-10 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent" 
+                                    <input
+                                        type="text"
+                                        value={searchQuery}
+                                        onChange={(e) => setSearchQuery(e.target.value)}
+                                        onKeyPress={handleKeyPress}
+                                        placeholder="Search by Height / Transaction Hash / Account Address"
+                                        className="w-full px-4 py-2 pl-10 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
                                     />
                                     <Search className="absolute left-3 top-2.5 w-4 h-4 text-gray-400" />
-                                    <button 
-                                        onClick={handleGlobalSearch} 
+                                    <button
+                                        onClick={handleGlobalSearch}
                                         className="absolute right-2 top-1.5 px-3 py-1 bg-green-600 text-white rounded-md hover:bg-green-700 transition duration-200 text-sm"
                                     >
                                         Search
                                     </button>
                                 </div>
                             </div>
-                            
+
                             {/* Header Actions */}
                             <div className="flex items-center space-x-4">
                                 {/* RPC Selector */}
                                 <div className="relative">
-                                    <button 
-                                        onClick={() => setIsRpcDropdownOpen(!isRpcDropdownOpen)} 
+                                    <button
+                                        onClick={() => setIsRpcDropdownOpen(!isRpcDropdownOpen)}
                                         className="flex items-center space-x-2 p-2 rounded-lg bg-gray-700 text-gray-300 hover:bg-gray-600 transition duration-200"
                                     >
                                         <div className={`w-3 h-3 rounded-full ${isRpcConnected ? 'bg-green-500' : 'bg-red-500'}`}></div>
@@ -2603,9 +2608,9 @@ const App = () => {
                                         <div className="absolute right-0 mt-2 w-64 bg-gray-800 border border-gray-700 rounded-lg shadow-xl z-50">
                                             <div className="p-2 space-y-1">
                                                 {RPC_CONFIGS.map((config, index) => (
-                                                    <button 
-                                                        key={index} 
-                                                        onClick={() => handleRpcChange(config)} 
+                                                    <button
+                                                        key={index}
+                                                        onClick={() => handleRpcChange(config)}
                                                         className={`w-full text-left px-3 py-2 rounded-lg text-sm transition duration-200 ${selectedConfig.label === config.label ? 'bg-green-600 text-white' : 'text-gray-300 hover:bg-gray-700'}`}
                                                     >
                                                         <div className="font-medium">{config.label}</div>
@@ -2616,11 +2621,11 @@ const App = () => {
                                         </div>
                                     )}
                                 </div>
-                                
+
                                 {/* Theme Toggle */}
-                                <button 
-                                    onClick={toggleTheme} 
-                                    className="p-2 rounded-full bg-gray-700 text-gray-300 hover:bg-gray-600 transition duration-200" 
+                                <button
+                                    onClick={toggleTheme}
+                                    className="p-2 rounded-full bg-gray-700 text-gray-300 hover:bg-gray-600 transition duration-200"
                                     title={isDark ? "Switch to light mode" : "Switch to dark mode"}
                                 >
                                     {isDark ? (
@@ -2633,11 +2638,11 @@ const App = () => {
                                         </svg>
                                     )}
                                 </button>
-                                
+
                                 {/* Refresh Button */}
-                                <button 
-                                    onClick={fetchStatus} 
-                                    className="p-2 rounded-full bg-gray-700 text-gray-300 hover:bg-gray-600 transition duration-200" 
+                                <button
+                                    onClick={fetchStatus}
+                                    className="p-2 rounded-full bg-gray-700 text-gray-300 hover:bg-gray-600 transition duration-200"
                                     title="Refresh Status"
                                 >
                                     <RefreshCcw className="w-5 h-5" />
@@ -2645,18 +2650,18 @@ const App = () => {
                             </div>
                         </div>
                     </div>
-                    
+
                     {/* Mobile Menu */}
                     {isMobileMenuOpen && (
                         <div className="md:hidden bg-gray-800 border-t border-gray-700">
                             <div className="px-4 py-2 space-y-1">
                                 {menuItems.map(({ label, route, icon: Icon }) => (
-                                    <button 
-                                        key={route} 
-                                        onClick={() => { 
-                                            navigate(route); 
-                                            setIsMobileMenuOpen(false); 
-                                        }} 
+                                    <button
+                                        key={route}
+                                        onClick={() => {
+                                            navigate(route);
+                                            setIsMobileMenuOpen(false);
+                                        }}
                                         className={`flex items-center w-full px-3 py-3 rounded-lg text-sm transition duration-200 ${currentRoute === route ? 'bg-green-600 text-white' : 'text-gray-300 hover:bg-gray-700'}`}
                                     >
                                         <Icon className="w-5 h-5 mr-3" />
