@@ -78,8 +78,8 @@ const getHexAddress = (operatorAddress) => {
 const RPC_CONFIGS = [
     {
         "label": "Warden Indonesia - Mainnet",
-        "COMETBFT_RPC_API": "https://rpc.warden.clogs.id",
-        "COSMOS_SDK_API": "https://api.warden.clogs.id"
+        "COMETBFT_RPC_API": "https://rpc.wardenexplorer.xyz",
+        "COSMOS_SDK_API": "https://api.wardenexplorer.xyz"
     },
     {
         "label": "Itrocket - Mainnet",
@@ -2689,4 +2689,5 @@ const App = () => {
 };
 
 export default App;
+
 
