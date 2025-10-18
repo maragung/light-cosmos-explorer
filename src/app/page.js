@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { RefreshCcw, Wifi, Zap, Clock, TrendingUp, DollarSign, List, Search, Users, LayoutDashboard, ChevronLeft, HardHat, CheckCircle, XCircle, Settings, Globe, Cloud, Code, Minus, MessageSquare, Database, Share2, AlertTriangle } from 'lucide-react';
+import { RefreshCcw, Wifi, Zap, TableCell, Badge, Clock, TrendingUp, DollarSign, List, Search, Users, LayoutDashboard, ChevronLeft, HardHat, CheckCircle, XCircle, Settings, Globe, Cloud, Code, Minus, MessageSquare, Database, Share2, AlertTriangle } from 'lucide-react';
 import { bech32 } from 'bech32';
 import { Buffer } from 'buffer';
 
@@ -78,8 +78,8 @@ const getHexAddress = (operatorAddress) => {
 const RPC_CONFIGS = [
     {
         "label": "Warden Indonesia - Mainnet",
-        "COMETBFT_RPC_API": "https://rpc.wardenexplorer.xyz",
-        "COSMOS_SDK_API": "https://api.wardenexplorer.xyz"
+        "COMETBFT_RPC_API": "https://rpc.warden.clogs.id",
+        "COSMOS_SDK_API": "https://api.warden.clogs.id"
     },
     {
         "label": "Itrocket - Mainnet",
@@ -123,6 +123,7 @@ const ROUTES = {
     ADDRESS_DETAIL: 'ADDRESS_DETAIL',
     SEARCH: 'SEARCH',
     PARAMETERS: 'PARAMETERS',
+    UPTIME: 'UPTIME',
 };
 
 const useRouter = () => {
@@ -149,6 +150,7 @@ const useRouter = () => {
             case ROUTES.HEALTH: path = '/health'; break;
             case ROUTES.SEARCH: path = '/search'; break;
             case ROUTES.PARAMETERS: path = '/parameters'; break;
+            case ROUTES.UPTIME: path = '/uptime'; break;
             default: path = '/';
         }
 
@@ -250,6 +252,12 @@ const useRouter = () => {
 
         if (path === '/parameters') {
             setCurrentRoute(ROUTES.PARAMETERS);
+            setCurrentParams({});
+            return;
+        }
+
+        if (path === '/uptime') {
+            setCurrentRoute(ROUTES.UPTIME);
             setCurrentParams({});
             return;
         }
@@ -2369,6 +2377,494 @@ const ParametersView = ({ cometBftRpcApi, cosmosSdkApi }) => {
     );
 };
 
+
+
+
+// Helpers: convert bech32 / get hex from consensus
+const getConsensusFromOperator = (operatorBech32) => {
+    if (!operatorBech32) return null;
+    try {
+        const decoded = bech32.decode(operatorBech32);
+        // replace prefix 'wardenvaloper' with 'wardenvalcons'
+        const prefix = operatorBech32.split("1")[0]; // e.g. wardenvaloper
+        // derive new prefix - here hardcoded for warden
+        const target = prefix.replace("valoper", "valcons");
+        return bech32.encode(target, decoded.words);
+    } catch (e) {
+        return null;
+    }
+};
+
+const getHexFromConsensus = (consensusBech32) => {
+    if (!consensusBech32) return null;
+    try {
+        const decoded = bech32.decode(consensusBech32);
+        const bytes = bech32.fromWords(decoded.words);
+        return Buffer.from(bytes).toString("hex").toUpperCase(); // no 0x, uppercase
+    } catch (e) {
+        return null;
+    }
+};
+
+const normalizeHex = (hex) => {
+    if (!hex) return null;
+    return hex.replace(/^0x/i, "").toUpperCase();
+};
+
+// Robust resolve operator from signing-info address
+const resolveOperatorFromSigningInfoAddress = (addr, maps) => {
+    // maps: { consensusHexToOp, consensusBechToOp, operatorToValidator }
+    if (!addr) return null;
+
+    // If it looks bech32 (has 1 and letters), treat as bech32 valcons
+    if (typeof addr === "string" && addr.includes("valcons")) {
+        // exact bech32 match
+        const op = maps.consensusBechToOp[addr];
+        if (op) return op;
+        // try hex conversion from that bech32
+        const hex = getHexFromConsensus(addr);
+        if (hex && maps.consensusHexToOp[hex]) return maps.consensusHexToOp[hex];
+        return null;
+    }
+
+    // if it looks like hex (0-9 A-F) treat as hex consensus
+    const maybeHex = normalizeHex(addr);
+    if (maybeHex && /^[0-9A-F]+$/.test(maybeHex)) {
+        if (maps.consensusHexToOp[maybeHex]) return maps.consensusHexToOp[maybeHex];
+        // sometimes signing infos store hex of operator? check operator map keys
+        if (maps.operatorToValidator[maybeHex]) return maybeHex;
+        return null;
+    }
+
+    // fallback: maybe it's operator bech32 already
+    if (typeof addr === "string" && addr.includes("valoper")) {
+        if (maps.operatorToValidator[addr]) return addr;
+    }
+
+    return null;
+};
+
+const getHexFromBase64Pubkey = (b64) => {
+    try {
+        if (!b64) return null;
+        // some shapes: { key: "<base64>" } or consensus_pubkey.value (base64) or raw bytes already hex
+        // if string length small / not base64, skip
+        const bytes = Buffer.from(b64, "base64");
+        if (!bytes || bytes.length === 0) return null;
+        return bytes.toString("hex").toUpperCase();
+    } catch (e) {
+        return null;
+    }
+};
+
+const getHexFromConsensusBech32 = (consensusBech32) => {
+    try {
+        if (!consensusBech32) return null;
+        const decoded = bech32.decode(consensusBech32);
+        const bytes = bech32.fromWords(decoded.words);
+        return Buffer.from(bytes).toString("hex").toUpperCase();
+    } catch (e) {
+        return null;
+    }
+};
+
+const looksLikeHex = (s) => {
+    if (!s) return false;
+    const n = normalizeHex(s);
+    return /^[0-9A-F]+$/.test(n);
+};
+
+
+const UptimeView = ({ cosmosSdkApi, navigate, ROUTES }) => {
+    const [rows, setRows] = useState([]);
+    const [signedWindow, setSignedWindow] = useState(10000);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState(null);
+    const [search, setSearch] = useState("");
+    const [isRefreshing, setIsRefreshing] = useState(false);
+    const [autoRefresh, setAutoRefresh] = useState(0); // 0 = off
+    const [viewMode, setViewMode] = useState('grid'); // 'grid' or 'list'
+
+    const buildMaps = (validators) => {
+        const operatorToValidator = {};
+        const consensusBechToOp = {};
+        const consensusHexToOp = {};
+        const pubkeyHexToOp = {};
+
+        for (const v of validators) {
+            const op = v.operator_address;
+            operatorToValidator[op] = v;
+
+            try {
+                const cons = convertOperatorToConsensus(op);
+                if (cons) {
+                    consensusBechToOp[cons] = op;
+                    const hex = getHexFromConsensusBech32(cons);
+                    if (hex) consensusHexToOp[hex] = op;
+                }
+            } catch (e) { }
+
+            const maybeB64 = v.consensus_pubkey?.key || v.consensus_pubkey?.value || v.consensus_pubkey;
+            const pubHex = getHexFromBase64Pubkey(maybeB64);
+            if (pubHex) pubkeyHexToOp[pubHex] = op;
+        }
+
+        return { operatorToValidator, consensusBechToOp, consensusHexToOp, pubkeyHexToOp };
+    };
+
+    const resolveOperator = (addr, maps) => {
+        if (!addr) return null;
+
+        if (addr.includes("valoper")) {
+            if (maps.operatorToValidator[addr]) return addr;
+            for (const k of Object.keys(maps.operatorToValidator)) {
+                if (k.toLowerCase() === addr.toLowerCase()) return k;
+            }
+        }
+
+        if (addr.includes("valcons")) {
+            if (maps.consensusBechToOp[addr]) return maps.consensusBechToOp[addr];
+            const hex = getHexFromConsensusBech32(addr);
+            if (hex && maps.consensusHexToOp[hex]) return maps.consensusHexToOp[hex];
+            if (hex && maps.pubkeyHexToOp[hex]) return maps.pubkeyHexToOp[hex];
+        }
+
+        const norm = normalizeHex(addr);
+        if (norm && looksLikeHex(norm)) {
+            if (maps.consensusHexToOp[norm]) return maps.consensusHexToOp[norm];
+            if (maps.pubkeyHexToOp[norm]) return maps.pubkeyHexToOp[norm];
+            for (const op of Object.keys(maps.operatorToValidator)) {
+                if (normalizeHex(op) === norm) return op;
+            }
+        }
+
+        return null;
+    };
+
+    const load = useCallback(
+        async (background = false) => {
+            if (!background) setLoading(true);
+            else setIsRefreshing(true);
+            setError(null);
+
+            try {
+                const valResp = await fetchWithRetry(`${cosmosSdkApi}/cosmos/staking/v1beta1/validators?pagination.limit=1000`);
+                const validators = valResp?.validators || valResp || [];
+                const maps = buildMaps(validators);
+
+                try {
+                    const sp = await fetchWithRetry(`${cosmosSdkApi}/cosmos/slashing/v1beta1/params`);
+                    const w = parseInt(sp?.params?.signed_blocks_window ?? sp?.signed_blocks_window ?? 10000);
+                    setSignedWindow(Number.isNaN(w) ? 10000 : w);
+                } catch (e) { }
+
+                const signResp = await fetchWithRetry(`${cosmosSdkApi}/cosmos/slashing/v1beta1/signing_infos?pagination.limit=2000`);
+                const infos = signResp?.info || signResp?.signing_infos || signResp?.val_signing_infos || [];
+
+                const out = infos.map((info, idx) => {
+                    const candidates = [
+                        info.address,
+                        info.validator_address,
+                        info.validator_signing_info?.address,
+                        info.val_signing_info?.address,
+                        info.address_hex,
+                        info.consensus_address,
+                    ].filter(Boolean);
+
+                    let operator = null;
+                    for (const c of candidates) {
+                        operator = resolveOperator(c, maps);
+                        if (operator) break;
+                    }
+
+                    if (!operator && infos.length === validators.length) {
+                        const maybe = validators[idx];
+                        if (maybe?.operator_address) operator = maybe.operator_address;
+                    }
+
+                    const validatorObj = operator ? maps.operatorToValidator[operator] : null;
+                    const moniker = validatorObj?.description?.moniker || "Unknown Validator";
+
+                    const missed = parseInt(info.missed_blocks_counter ?? info.validator_signing_info?.missed_blocks_counter ?? 0) || 0;
+                    const uptime = signedWindow > 0 ? (((signedWindow - missed) / signedWindow) * 100).toFixed(2) : "100.00";
+
+                    return {
+                        moniker,
+                        operatorAddress: operator || null,
+                        consensusAddress: candidates[0] || info.address || info.validator_address || "N/A",
+                        missedBlocks: missed,
+                        uptime,
+                    };
+                });
+
+                out.sort((a, b) => a.missedBlocks - b.missedBlocks);
+                setRows(out);
+            } catch (e) {
+                console.error("UptimeView load error:", e);
+                setError(e.message || String(e));
+            } finally {
+                setLoading(false);
+                setIsRefreshing(false);
+            }
+        },
+        [cosmosSdkApi]
+    );
+
+    // Auto refresh effect
+    useEffect(() => {
+        if (autoRefresh > 0) {
+            const interval = setInterval(() => {
+                load(true);
+            }, autoRefresh * 1000);
+            return () => clearInterval(interval);
+        }
+    }, [autoRefresh, load]);
+
+    useEffect(() => {
+        load();
+    }, [load]);
+
+    const filtered = rows.filter((r) => {
+        if (!search) return true;
+        const q = search.toLowerCase();
+        return (r.moniker && r.moniker.toLowerCase().includes(q)) || (r.operatorAddress && r.operatorAddress.toLowerCase().includes(q));
+    });
+
+    const getUptimeColor = (uptime) => {
+        const val = parseFloat(uptime);
+        if (val >= 95) return "border-l-green-500 bg-green-500/10";
+        if (val >= 80) return "border-l-yellow-500 bg-yellow-500/10";
+        return "border-l-red-500 bg-red-500/10";
+    };
+
+    const getUptimeTextColor = (uptime) => {
+        const val = parseFloat(uptime);
+        if (val >= 95) return "text-green-400";
+        if (val >= 80) return "text-yellow-400";
+        return "text-red-400";
+    };
+
+    // FIXED: Navigation handler
+    const handleValidatorClick = (validator) => {
+        // Check if all required props are available
+        if (validator.operatorAddress && navigate && ROUTES?.VALIDATOR_DETAIL) {
+            navigate(ROUTES.VALIDATOR_DETAIL, { address: validator.operatorAddress });
+        }
+    };
+
+    const refreshOptions = [
+        { label: "Auto: Off", value: 0 },
+        { label: "Auto: 1s", value: 1 },
+        { label: "Auto: 5s", value: 5 },
+        { label: "Auto: 10s", value: 10 },
+        { label: "Auto: 30s", value: 30 },
+        { label: "Auto: 60s", value: 60 },
+    ];
+
+    if (loading) return (
+        <div className="p-6 flex items-center justify-center">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-green-400 mr-3"></div>
+            <span className="text-green-400">Loading uptime data...</span>
+        </div>
+    );
+
+    if (error) return (
+        <div className="p-6 text-red-400">
+            <div className="flex items-center mb-3">
+                <div className="w-6 h-6 bg-red-500 rounded-full flex items-center justify-center mr-2">
+                    <span className="text-white text-sm">!</span>
+                </div>
+                Error: {error}
+            </div>
+            <button onClick={() => load()} className="px-4 py-2 bg-red-600 rounded text-white">
+                Try Again
+            </button>
+        </div>
+    );
+
+    return (
+        <div className="p-4 space-y-4">
+            {/* Header */}
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                <div>
+                    <h2 className="text-xl font-bold text-green-400">Validator Uptime</h2>
+                    <p className="text-gray-400 text-sm">
+                        {filtered.length} validators • Window: {signedWindow.toLocaleString()} blocks
+                        {autoRefresh > 0 && (
+                            <span className="ml-2 text-green-400">
+                                • Auto-refresh: {autoRefresh}s
+                            </span>
+                        )}
+                    </p>
+                </div>
+                
+                <div className="flex flex-wrap items-center gap-2">
+                    {/* Search */}
+                    <div className="relative">
+                        <Search className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 w-4 h-4" />
+                        <input 
+                            value={search} 
+                            onChange={(e) => setSearch(e.target.value)} 
+                            className="pl-8 pr-3 py-1 bg-gray-700 rounded text-sm w-40" 
+                            placeholder="Search..." 
+                        />
+                    </div>
+
+                    {/* View Toggle */}
+                    <div className="flex bg-gray-700 rounded p-1">
+                        <button
+                            onClick={() => setViewMode('grid')}
+                            className={`px-2 py-1 rounded text-xs ${viewMode === 'grid' ? 'bg-green-600' : ''}`}
+                        >
+                            Grid
+                        </button>
+                        <button
+                            onClick={() => setViewMode('list')}
+                            className={`px-2 py-1 rounded text-xs ${viewMode === 'list' ? 'bg-green-600' : ''}`}
+                        >
+                            List
+                        </button>
+                    </div>
+
+                    {/* Auto Refresh */}
+                    <select 
+                        value={autoRefresh}
+                        onChange={(e) => setAutoRefresh(Number(e.target.value))}
+                        className="px-2 py-1 bg-gray-700 rounded text-sm"
+                    >
+                        {refreshOptions.map(opt => (
+                            <option key={opt.value} value={opt.value}>
+                                {opt.label}
+                            </option>
+                        ))}
+                    </select>
+
+                    {/* Refresh Button */}
+                    <button 
+                        onClick={() => load(true)} 
+                        disabled={isRefreshing}
+                        className="px-3 py-1 bg-green-600 rounded text-white flex items-center gap-1 disabled:opacity-50"
+                    >
+                        <RefreshCcw className={`w-3 h-3 ${isRefreshing ? "animate-spin" : ""}`} />
+                        <span className="text-sm">Refresh</span>
+                    </button>
+                </div>
+            </div>
+
+            {/* Content */}
+            {viewMode === 'grid' ? (
+                /* Simple Grid View */
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+                    {filtered.map((v) => {
+                        const isClickable = !!v.operatorAddress;
+                        
+                        return (
+                            <div
+                                key={v.operatorAddress || v.consensusAddress}
+                                onClick={() => isClickable && handleValidatorClick(v)}
+                                className={`border-l-4 p-3 rounded-r-lg transition-all duration-200 ${
+                                    isClickable 
+                                        ? 'cursor-pointer hover:scale-105 hover:shadow-lg' 
+                                        : 'cursor-not-allowed opacity-60'
+                                } ${getUptimeColor(v.uptime)}`}
+                            >
+                                <div className="flex justify-between items-start mb-2">
+                                    <div className="flex-1 min-w-0">
+                                        <div className="text-sm font-medium text-white truncate" title={v.moniker}>
+                                            {v.moniker}
+                                        </div>
+                                    </div>
+                                    <div className={`text-lg font-bold ${getUptimeTextColor(v.uptime)}`}>
+                                        {v.uptime}%
+                                    </div>
+                                </div>
+                                
+                                <div className="flex justify-between text-xs">
+                                    <span className="text-gray-400">Missed:</span>
+                                    <span className="font-mono text-white">
+                                        {v.missedBlocks.toLocaleString()}
+                                    </span>
+                                </div>
+
+                                {!isClickable && (
+                                    <div className="text-xs text-gray-500 mt-1">
+                                        Details unavailable
+                                    </div>
+                                )}
+                            </div>
+                        );
+                    })}
+                </div>
+            ) : (
+                /* Simple List View */
+                <div className="bg-gray-800 rounded-lg overflow-hidden">
+                    <div className="grid grid-cols-12 gap-4 p-3 text-xs text-gray-400 border-b border-gray-700">
+                        <div className="col-span-6">Validator</div>
+                        <div className="col-span-3 text-center">Uptime</div>
+                        <div className="col-span-3 text-center">Missed Blocks</div>
+                    </div>
+                    
+                    {filtered.map((v) => {
+                        const isClickable = !!v.operatorAddress;
+                        
+                        return (
+                            <div
+                                key={v.operatorAddress || v.consensusAddress}
+                                onClick={() => isClickable && handleValidatorClick(v)}
+                                className={`grid grid-cols-12 gap-4 p-3 border-b border-gray-700 last:border-b-0 transition-all duration-200 ${
+                                    isClickable 
+                                        ? 'cursor-pointer hover:bg-gray-750' 
+                                        : 'cursor-not-allowed opacity-60'
+                                }`}
+                            >
+                                <div className="col-span-6 flex items-center gap-2">
+                                    <div className={`w-2 h-2 rounded-full ${
+                                        parseFloat(v.uptime) >= 95 ? 'bg-green-500' : 
+                                        parseFloat(v.uptime) >= 80 ? 'bg-yellow-500' : 'bg-red-500'
+                                    }`} />
+                                    <div className="text-sm font-medium text-white truncate" title={v.moniker}>
+                                        {v.moniker}
+                                    </div>
+                                    {!isClickable && (
+                                        <span className="text-xs text-gray-500">(no details)</span>
+                                    )}
+                                </div>
+                                
+                                <div className="col-span-3 text-center">
+                                    <div className={`text-sm font-bold ${getUptimeTextColor(v.uptime)}`}>
+                                        {v.uptime}%
+                                    </div>
+                                </div>
+                                
+                                <div className="col-span-3 text-center">
+                                    <div className="font-mono text-sm text-white">
+                                        {v.missedBlocks.toLocaleString()}
+                                    </div>
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+            )}
+
+            {/* Empty State */}
+            {filtered.length === 0 && (
+                <div className="text-center py-8 text-gray-400">
+                    No validators found
+                    {search && (
+                        <button 
+                            onClick={() => setSearch('')} 
+                            className="ml-3 px-3 py-1 bg-gray-700 rounded text-sm"
+                        >
+                            Clear search
+                        </button>
+                    )}
+                </div>
+            )}
+        </div>
+    );
+};
+
 const App = () => {
     const { currentRoute, currentParams, navigate, isReady } = useRouter();
     const [status, setStatus] = useState(null);
@@ -2451,6 +2947,7 @@ const App = () => {
             case ROUTES.SEARCH: return <SearchView navigate={navigate} setModal={setModal} {...apiProps} />;
             case ROUTES.PROPOSALS: return <ProposalsView {...apiProps} />;
             case ROUTES.PARAMETERS: return <ParametersView {...apiProps} />;
+            case ROUTES.UPTIME: return <UptimeView {...apiProps} navigate={navigate} />;
             default: return <Dashboard status={status} navigate={navigate} setModal={setModal} {...apiProps} />;
         }
     }, [currentRoute, currentParams, navigate, status, setModal, selectedConfig, isReady]);
@@ -2461,10 +2958,12 @@ const App = () => {
         { label: 'Transactions', route: ROUTES.TXS, icon: Zap },
         { label: 'Mempool', route: ROUTES.MEMPOOL, icon: Cloud },
         { label: 'Validators', route: ROUTES.VALIDATORS, icon: Users },
+        { label: 'Uptime', route: ROUTES.UPTIME, icon: TrendingUp },
         { label: 'Proposals', route: ROUTES.PROPOSALS, icon: MessageSquare },
         { label: 'Parameters', route: ROUTES.PARAMETERS, icon: Settings },
         { label: 'Network Info', route: ROUTES.NET_INFO, icon: Wifi },
         { label: 'Health Check', route: ROUTES.HEALTH, icon: CheckCircle },
+
     ], []);
 
     return (
@@ -2689,5 +3188,3 @@ const App = () => {
 };
 
 export default App;
-
-
