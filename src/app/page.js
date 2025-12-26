@@ -2,9 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { RefreshCcw, Wifi, Zap, TableCell, Badge, Clock, TrendingUp, DollarSign, List, Search, Users, LayoutDashboard, ChevronLeft, HardHat, CheckCircle, XCircle, Settings, Globe, Cloud, Code, Minus, MessageSquare, Database, Share2, AlertTriangle } from 'lucide-react';
-import { useRpcConfig } from './components/hooks';
-import { useRouter } from './components/hooks';
-import { useTheme } from './components/hooks';
+import { useRpcConfig, useRouter, useTheme, RpcConfigProvider, RouterProvider, ThemeProvider } from './components/hooks';
 import { RPC_CONFIGS, ROUTES } from './components/constants';
 import ValidatorDetail from './components/ValidatorDetail';
 import UptimeView from './components/UptimeView';
@@ -25,7 +23,10 @@ const MainLayout = () => {
     const fetchStatus = useCallback(async () => {
         setIsLoading(true);
         try {
-            const response = await fetch(`${cometBftRpcApi}/status`);
+            // Include credentials/cookies in the request
+            const response = await fetch(`${cometBftRpcApi}/status`, {
+                credentials: 'include'
+            });
             const data = await response.json();
             setStatus(data.result);
         } catch (error) {
@@ -271,4 +272,14 @@ const Card = ({ title, value, icon: Icon, onClick, className = '' }) => (
     </div>
 );
 
-export default MainLayout;
+export default function Home() {
+    return (
+        <ThemeProvider>
+            <RpcConfigProvider>
+                <RouterProvider>
+                    <MainLayout />
+                </RouterProvider>
+            </RpcConfigProvider>
+        </ThemeProvider>
+    );
+}
