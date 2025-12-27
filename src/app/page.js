@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { RefreshCcw, Wifi, Zap, TableCell, Badge, Clock, TrendingUp, DollarSign, List, Search, Users, LayoutDashboard, ChevronLeft, HardHat, CheckCircle, XCircle, Settings, Globe, Cloud, Code, Minus, MessageSquare, Database, Share2, AlertTriangle } from 'lucide-react';
+import { RefreshCcw, Wifi, Zap, TableCell, Clock, TrendingUp, List, Search, Users, LayoutDashboard, MessageSquare, CheckCircle } from 'lucide-react';
 import { useRpcConfig, useRouter, useTheme, RpcConfigProvider, RouterProvider, ThemeProvider } from './components/hooks';
 import { RPC_CONFIGS, ROUTES } from './components/constants';
 import ValidatorDetail from './components/ValidatorDetail';
