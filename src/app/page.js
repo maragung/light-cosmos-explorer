@@ -2,15 +2,15 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { RefreshCcw, Wifi, Zap, TableCell, Badge, Clock, TrendingUp, DollarSign, List, Search, Users, LayoutDashboard, ChevronLeft, HardHat, CheckCircle, XCircle, Settings, Globe, Cloud, Code, Minus, MessageSquare, Database, Share2, AlertTriangle } from 'lucide-react';
-import { useRpcConfig } from './components/hooks';
-import { useRouter } from './components/hooks';
-import { useTheme } from './components/hooks';
-import { RPC_CONFIGS, ROUTES } from './components/constants';
+import { useRpcConfig, useRouter, useTheme, RPC_CONFIGS, ROUTES, createFetchWithCookies } from './components/hooks';
 import ValidatorDetail from './components/ValidatorDetail';
-import UptimeView from './components/UptimeView';
-import BlocksView from './components/BlocksView';
-import ProposalsView from './components/ProposalsView';
-import TransactionsView from './components/TransactionsView';
+import DashboardView from './views/DashboardView';
+import ValidatorsView from './views/ValidatorsView';
+import UptimeView from './views/UptimeView';
+import BlocksView from './views/BlocksView';
+import ProposalsView from './views/ProposalsView';
+import TransactionsView from './views/TransactionsView';
+import { RouterProvider, ThemeProvider, RpcConfigProvider } from './components/hooks';
 
 const MainLayout = () => {
     const { selectedConfig, setRpcConfig } = useRpcConfig();
@@ -25,7 +25,8 @@ const MainLayout = () => {
     const fetchStatus = useCallback(async () => {
         setIsLoading(true);
         try {
-            const response = await fetch(`${cometBftRpcApi}/status`);
+            const fetchWithCookies = createFetchWithCookies(selectedConfig);
+            const response = await fetchWithCookies(`${cometBftRpcApi}/status`);
             const data = await response.json();
             setStatus(data.result);
         } catch (error) {
@@ -34,7 +35,7 @@ const MainLayout = () => {
         } finally {
             setIsLoading(false);
         }
-    }, [cometBftRpcApi]);
+    }, [cometBftRpcApi, selectedConfig]);
 
     useEffect(() => {
         if (isReady) fetchStatus();
@@ -53,7 +54,7 @@ const MainLayout = () => {
         { label: 'Search', route: ROUTES.SEARCH, icon: Search },
     ];
 
-    const apiProps = { cometBftRpcApi, cosmosSdkApi, navigate, status };
+    const apiProps = { cometBftRpcApi, cosmosSdkApi, navigate, status, selectedConfig };
 
     const renderCurrentView = () => {
         if (!isReady) return <div className="p-4 text-center text-gray-400">Loading...</div>;
@@ -153,122 +154,23 @@ const MainLayout = () => {
     );
 };
 
-// Placeholder components for other views
-const DashboardView = ({ cometBftRpcApi, cosmosSdkApi, status }) => {
-    const [networkInfo, setNetworkInfo] = useState(null);
 
-    useEffect(() => {
-        const fetchNetworkInfo = async () => {
-            try {
-                const response = await fetch(`${cometBftRpcApi}/status`);
-                const data = await response.json();
-                setNetworkInfo(data.result);
-            } catch (error) {
-                console.error('Error fetching network info:', error);
-            }
-        };
-        fetchNetworkInfo();
-    }, [cometBftRpcApi]);
-
-    return (
-        <div className="space-y-6">
-            <h1 className="text-2xl font-bold text-green-400">Dashboard</h1>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                <Card title="Latest Block" value={status?.sync_info?.latest_block_height ? parseInt(status.sync_info.latest_block_height).toLocaleString() : '...'} icon={TableCell} />
-                <Card title="Block Time" value={status?.validator_info?.voting_power ? `${(status.validator_info.voting_power / 1000000).toFixed(2)}s` : 'N/A'} icon={Clock} />
-                <Card title="Total Validators" value={status?.validator_info ? 'N/A' : '...'} icon={Users} />
-                <Card title="Sync Status" value={status?.sync_info?.catching_up ? 'Syncing' : 'Synced'} icon={RefreshCcw} />
-            </div>
-        </div>
-    );
-};
-
-const ValidatorsView = ({ cometBftRpcApi, cosmosSdkApi, navigate }) => {
-    const [validators, setValidators] = useState([]);
-    const [isLoading, setIsLoading] = useState(true);
-    const [error, setError] = useState(null);
-
-    useEffect(() => {
-        const fetchValidators = async () => {
-            try {
-                setIsLoading(true);
-                const response = await fetch(`${cosmosSdkApi}/cosmos/staking/v1beta1/validators`);
-                const data = await response.json();
-                setValidators(data.validators || []);
-            } catch (err) {
-                setError(err.message);
-            } finally {
-                setIsLoading(false);
-            }
-        };
-        fetchValidators();
-    }, [cosmosSdkApi]);
-
-    if (isLoading) return <div className="p-4 text-center">Loading validators...</div>;
-    if (error) return <div className="p-4 text-red-500">Error: {error}</div>;
-
-    return (
-        <div className="space-y-6">
-            <h1 className="text-2xl font-bold text-green-400">Validators</h1>
-            <div className="bg-gray-800 rounded-xl overflow-hidden neon-border">
-                <div className="overflow-x-auto">
-                    <table className="min-w-full divide-y divide-gray-700">
-                        <thead className="bg-gray-700">
-                            <tr>
-                                <th className="px-6 py-3 text-left text-xs font-bold text-green-400 uppercase">Moniker</th>
-                                <th className="px-6 py-3 text-left text-xs font-bold text-green-400 uppercase">Status</th>
-                                <th className="px-6 py-3 text-left text-xs font-bold text-green-400 uppercase">Voting Power</th>
-                                <th className="px-6 py-3 text-left text-xs font-bold text-green-400 uppercase">Commission</th>
-                            </tr>
-                        </thead>
-                        <tbody className="bg-gray-800 divide-y divide-gray-700">
-                            {validators.map((validator) => (
-                                <tr 
-                                    key={validator.operator_address} 
-                                    className="hover:bg-gray-700 cursor-pointer transition duration-150"
-                                    onClick={() => navigate(ROUTES.VALIDATOR_DETAIL, { address: validator.operator_address })}
-                                >
-                                    <td className="px-6 py-4 whitespace-nowrap">
-                                        <div className="text-sm font-medium text-white">{validator.description?.moniker || 'Unknown'}</div>
-                                        <div className="text-xs text-gray-400 truncate max-w-xs">{validator.operator_address}</div>
-                                    </td>
-                                    <td className="px-6 py-4 whitespace-nowrap">
-                                        <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                                            validator.status === 'BOND_STATUS_BONDED' ? 'bg-green-800 text-green-200' : 
-                                            validator.status === 'BOND_STATUS_UNBONDING' ? 'bg-yellow-800 text-yellow-200' : 
-                                            'bg-red-800 text-red-200'
-                                        }`}>
-                                            {validator.status?.replace('BOND_STATUS_', '') || 'UNKNOWN'}
-                                        </span>
-                                    </td>
-                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-300">
-                                        {validator.tokens ? parseFloat(validator.tokens).toLocaleString() : '0'}
-                                    </td>
-                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-300">
-                                        {validator.commission?.commission_rates?.rate ? 
-                                            (parseFloat(validator.commission.commission_rates.rate) * 100).toFixed(2) + '%' : 'N/A'}
-                                    </td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-    );
-};
-
-const Card = ({ title, value, icon: Icon, onClick, className = '' }) => (
-    <div
-        onClick={onClick}
-        className={`bg-gray-800 p-4 rounded-lg shadow-lg hover:shadow-xl transition duration-300 neon-border ${onClick ? 'cursor-pointer' : ''} ${className} scale-95`}
-    >
-        <div className="flex items-center justify-between">
-            <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">{title}</h3>
-            {Icon && <Icon className="w-5 h-5 text-green-400" />}
-        </div>
-        <p className="mt-2 text-2xl font-extrabold text-white truncate">{value}</p>
-    </div>
-);
 
 export default MainLayout;
+
+// Wrap the main layout with all providers
+import { RouterProvider, ThemeProvider, RpcConfigProvider } from './components/hooks';
+
+const WrappedMainLayout = () => {
+  return (
+    <RpcConfigProvider>
+      <ThemeProvider>
+        <RouterProvider>
+          <MainLayout />
+        </RouterProvider>
+      </ThemeProvider>
+    </RpcConfigProvider>
+  );
+};
+
+export { WrappedMainLayout as Page };
