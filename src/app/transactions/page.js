@@ -7,24 +7,41 @@ import { fetchWithRetry } from '@/lib/utils';
 import { useRpc } from '@/context/RpcContext';
 import Loader from '@/components/Loader';
 
-const BLOCK_TIME_MS = 5000; // Sesuaikan dengan block time jaringan Anda
+const BLOCK_TIME_MS = 5000;
 
 export default function TransactionsPage() {
     const router = useRouter();
     const { selectedConfig, isLoaded } = useRpc();
-    const [allTxs, setAllTxs] = useState([]); // Simpan semua transaksi yang pernah diambil
+    const [allTxs, setAllTxs] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
-    const [autoRefresh, setAutoRefresh] = useState(true); // Default aktif, tapi bisa di-stop
+    const [autoRefresh, setAutoRefresh] = useState(true);
     const [summaryData, setSummaryData] = useState({
         totalTransactions: "Loading...",
         recentTransactions: "Loading...",
         tps: "Loading...",
     });
+    const [blockTimeCache, setBlockTimeCache] = useState({}); // { height: timestamp }
 
     // Pagination
     const [currentPage, setCurrentPage] = useState(1);
     const ITEMS_PER_PAGE = 20;
+
+    // Fetch block time by height
+    const fetchBlockTime = useCallback(async (height) => {
+        if (blockTimeCache[height]) return blockTimeCache[height];
+        try {
+            const res = await fetchWithRetry(`${selectedConfig.COMETBFT_RPC_API}/block?height=${height}`);
+            const time = res.result?.block?.header?.time;
+            if (time) {
+                setBlockTimeCache(prev => ({ ...prev, [height]: time }));
+                return time;
+            }
+        } catch (err) {
+            console.warn(`Failed to fetch block ${height}:`, err);
+        }
+        return new Date().toISOString(); // fallback
+    }, [selectedConfig, blockTimeCache]);
 
     const getLatestBlockHeight = useCallback(async () => {
         if (!selectedConfig) return null;
@@ -56,29 +73,39 @@ export default function TransactionsPage() {
             const data = await fetchWithRetry(url);
             if (!data?.result?.txs) return [];
 
-            return data.result.txs.map((tx) => {
-                const messageEvents = tx.tx_result?.events?.filter(e => e.type === 'message') || [];
-                const messages = messageEvents.flatMap(event =>
-                    event.attributes?.filter(attr => attr.key === 'action')?.map(attr => attr.value) || []
-                );
+            const txs = data.result.txs.map((tx) => ({
+                hash: (tx.hash?.startsWith('0x') ? tx.hash.substring(2) : tx.hash) || 'N/A',
+                height: tx.height || 'N/A',
+                code: tx.tx_result?.code ?? 1,
+                messages: tx.tx_result?.events
+                    ?.filter(e => e.type === 'message')
+                    ?.flatMap(e => e.attributes?.filter(a => a.key === 'action')?.map(a => a.value) || []) || [],
+            }));
 
-                return {
-                    hash: (tx.hash?.startsWith('0x') ? tx.hash.substring(2) : tx.hash) || 'N/A',
-                    height: tx.height || 'N/A',
-                    code: tx.tx_result?.code ?? 1,
-                    messages: messages,
-                    timestamp: tx.tx_result?.timestamp || new Date().toISOString(),
-                };
-            });
+            // Ambil tinggi unik
+            const uniqueHeights = [...new Set(txs.map(tx => tx.height).filter(h => h !== 'N/A'))];
+            
+            // Fetch semua block time yang belum di-cache
+            const missingHeights = uniqueHeights.filter(h => !blockTimeCache[h]);
+            if (missingHeights.length > 0) {
+                await Promise.all(
+                    missingHeights.map(h => fetchBlockTime(h))
+                );
+            }
+
+            // Tambahkan timestamp dari cache
+            return txs.map(tx => ({
+                ...tx,
+                timestamp: blockTimeCache[tx.height] || new Date().toISOString(),
+            }));
         } catch (error) {
             console.error('Error fetching recent transactions:', error);
             return [];
         }
-    }, [selectedConfig]);
+    }, [selectedConfig, blockTimeCache, fetchBlockTime]);
 
     const fetchAllData = useCallback(async () => {
         if (!selectedConfig) return;
-        // Only show loader on first load
         if (allTxs.length === 0) setLoading(true);
         setError(null);
         try {
@@ -86,7 +113,6 @@ export default function TransactionsPage() {
             if (!latestHeight) throw new Error('Could not get latest block height');
 
             const newTxs = await fetchRecentTransactions(latestHeight);
-            // Gabungkan & hindari duplikat berdasarkan hash
             const existingHashes = new Set(allTxs.map(tx => tx.hash));
             const uniqueNewTxs = newTxs.filter(tx => !existingHashes.has(tx.hash));
             const updatedTxs = [...uniqueNewTxs, ...allTxs];
@@ -105,25 +131,18 @@ export default function TransactionsPage() {
         }
     }, [selectedConfig, getLatestBlockHeight, fetchRecentTransactions, allTxs]);
 
-    // Initial load
     useEffect(() => {
-        if (isLoaded) {
-            fetchAllData();
-        }
+        if (isLoaded) fetchAllData();
     }, [isLoaded, fetchAllData]);
 
-    // Auto-refresh interval
     useEffect(() => {
         let interval = null;
         if (autoRefresh && isLoaded) {
             interval = setInterval(fetchAllData, BLOCK_TIME_MS);
         }
-        return () => {
-            if (interval) clearInterval(interval);
-        };
+        return () => clearInterval(interval);
     }, [autoRefresh, isLoaded, fetchAllData]);
 
-    // Reset ke halaman 1 saat ada data baru masuk
     useEffect(() => {
         setCurrentPage(1);
     }, [allTxs.length]);
@@ -133,12 +152,13 @@ export default function TransactionsPage() {
         const date = new Date(timestamp);
         const now = new Date();
         const diffMs = now - date;
+        if (diffMs < 0) return 'N/A'; // future time?
         if (diffMs < 60000) return 'Just now';
         if (diffMs < 3600000) return `${Math.floor(diffMs / 60000)}m ago`;
-        return date.toLocaleString();
+        if (diffMs < 86400000) return `${Math.floor(diffMs / 3600000)}h ago`;
+        return date.toLocaleDateString();
     };
 
-    // Pagination
     const totalPages = Math.max(1, Math.ceil(allTxs.length / ITEMS_PER_PAGE));
     const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
     const currentTxs = useMemo(
@@ -235,7 +255,6 @@ export default function TransactionsPage() {
                         </div>
                     </div>
 
-                    {/* Pagination Controls */}
                     {totalPages > 1 && (
                         <div className="flex justify-center items-center space-x-2 mt-4">
                             <button
