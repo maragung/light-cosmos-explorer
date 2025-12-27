@@ -1,0 +1,262 @@
+@import "tailwindcss";
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+  }
+
+  /* Efek neon untuk dark mode */
+  body {
+    border: 1px solid rgba(57, 255, 20, 0.3);
+    box-shadow: 0 0 10px rgba(57, 255, 20, 0.4);
+  }
+
+  div {
+    border: 1px solid rgba(57, 255, 20, 0.2);
+    box-shadow: 0 0 5px rgba(57, 255, 20, 0.3);
+  }
+
+  section {
+    border: 1px solid rgba(57, 255, 20, 0.3);
+    box-shadow: 0 0 8px rgba(57, 255, 20, 0.4);
+  }
+
+  button {
+    border: 1px solid rgba(57, 255, 20, 0.4) !important;
+    box-shadow: 0 0 6px rgba(57, 255, 20, 0.5) !important;
+  }
+
+  header,
+  footer {
+    border: 1px solid rgba(57, 255, 20, 0.4);
+    box-shadow: 0 0 12px rgba(57, 255, 20, 0.5);
+  }
+
+  nav {
+    border: 1px solid rgba(57, 255, 20, 0.3);
+    box-shadow: 0 0 8px rgba(57, 255, 20, 0.4);
+  }
+
+  article {
+    border: 1px solid rgba(57, 255, 20, 0.25);
+    box-shadow: 0 0 6px rgba(57, 255, 20, 0.35);
+  }
+
+  main {
+    border: 1px solid rgba(57, 255, 20, 0.35);
+    box-shadow: 0 0 15px rgba(57, 255, 20, 0.45);
+  }
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+/* styles/globals.css - Light mode seperti DeepSeek */
+.light {
+  --bg-color: #ffffff;
+  --text-color: #1a1a1a;
+  --border-color: #e5e7eb;
+  --card-bg: #ffffff;
+  --header-bg: #f8fafc;
+  --sidebar-bg: #f1f5f9;
+  --accent-color: #10a37f;
+}
+
+.light body {
+  background-color: var(--bg-color);
+  color: var(--text-color);
+  border: none;
+  box-shadow: none;
+}
+
+.light .bg-gray-800 {
+  background-color: var(--card-bg);
+  border: 1px solid var(--border-color);
+  box-shadow: 0 1px 3px rgba(167, 192, 4, 0.1);
+}
+
+.light .bg-gray-900 {
+  background-color: var(--header-bg);
+  border: none;
+  box-shadow: none;
+}
+
+.light .text-white {
+  color: var(--text-color);
+}
+
+.light .text-gray-200 {
+  color: #8691aa;
+}
+
+.light .text-gray-300 {
+  color: #0a43c8;
+}
+
+.light .text-gray-400 {
+  color: #1ec10c;
+}
+
+.light .border-gray-700 {
+  border-color: var(--border-color);
+  box-shadow: none;
+}
+
+.light .bg-gray-700 {
+  background-color: #f8fafc;
+  border: 1px solid var(--border-color);
+}
+
+.light .text-indigo-400 {
+  color: #484cc4;
+}
+
+.light .bg-indigo-600 {
+  background-color: var(--accent-color);
+  border: none;
+  box-shadow: none;
+}
+
+.light .bg-indigo-700 {
+  background-color: #0d8c6c;
+  border: none;
+  box-shadow: none;
+}
+
+.light .border-indigo-700 {
+  border-color: #48d8d8;
+  box-shadow: none;
+}
+
+.light .bg-green-900 {
+  background-color: #d1fae5;
+  border: 1px solid #a7f3d0;
+  box-shadow: none;
+}
+
+.light .bg-red-900 {
+  background-color: #fee2e2;
+  border: 1px solid #fecaca;
+  box-shadow: none;
+}
+
+.light .bg-yellow-900 {
+  background-color: #fef3c7;
+  border: 1px solid #fde68a;
+  box-shadow: none;
+}
+
+.light section {
+  border: 1px solid #f3f3f0;
+  box-shadow: none;
+}
+
+/* Reset semua elemen di light mode agar bersih seperti DeepSeek */
+.light body,
+.light div,
+.light button,
+.light header,
+.light footer,
+.light nav,
+.light article,
+.light main {
+  border: none !important;
+  box-shadow: none !important;
+}
+
+/* Tambahan untuk tampilan yang lebih mirip DeepSeek */
+.light .bg-gray-100 {
+  background-color: #f8fafc;
+}
+
+.light .bg-gray-200 {
+  background-color: #136ac1;
+}
+
+.light .text-gray-600 {
+  color: #4887d8;
+}
+
+.light .text-gray-700 {
+  color: #bcc0c6;
+}
+
+.light .border-gray-300 {
+  border-color: #e5e7eb;
+}
+
+.light .shadow-sm {
+  box-shadow: 0 1px 2px rgba(39, 31, 31, 0.05);
+}
+
+.light .shadow-md {
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Light Theme Neon Colors */
+  --neon-border-color-light: #22c55e; /* green-500 */
+  --neon-shadow-color-light: rgba(34, 197, 94, 0.6);
+  --background-light: #f9fafb; /* gray-50 */
+  --foreground-light: #111827; /* gray-900 */
+}
+
+.dark {
+  /* Dark Theme Neon Colors */
+  --neon-border-color-dark: #86efac; /* green-300 */
+  --neon-shadow-color-dark: rgba(134, 239, 172, 0.4);
+  --background-dark: #030712; /* gray-950 */
+  --foreground-dark: #f9fafb; /* gray-50 */
+}
+
+body {
+  background-color: var(--background-light);
+  color: var(--foreground-light);
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+.dark body {
+  background-color: var(--background-dark);
+  color: var(--foreground-dark);
+}
+
+@layer utilities {
+  .neon-border {
+    border: 1px solid transparent;
+    box-shadow: 0 0 5px transparent,
+                0 0 10px transparent;
+    transition: border-color 0.3s ease, box-shadow 0.3s ease;
+  }
+
+  .light .neon-border {
+    border-color: var(--neon-border-color-light);
+    box-shadow: 0 0 5px var(--neon-shadow-color-light),
+                0 0 10px var(--neon-shadow-color-light);
+  }
+
+  .dark .neon-border {
+    border-color: var(--neon-border-color-dark);
+    box-shadow: 0 0 8px var(--neon-shadow-color-dark),
+                0 0 16px var(--neon-shadow-color-dark);
+  }
+}
