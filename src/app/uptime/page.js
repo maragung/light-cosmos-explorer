@@ -178,11 +178,13 @@ export default function UptimePage() {
         }
     };
 
-    const calculateUptime = (signed, missed) => {
-        const total = signed + missed;
+    const calculateUptimeFromSlashingWindow = (missedBlocksCounter, signedBlocksWindow) => {
+        const total = signedBlocksWindow;
+        const missed = parseInt(missedBlocksCounter) || 0;
+        const signed = total - missed;
         if (total === 0) return "0.00";
         return ((signed / total) * 100).toFixed(2);
-    }
+    };
 
     /**
      * Processes block data to determine who signed.
@@ -227,7 +229,12 @@ export default function UptimePage() {
                 else v.counts.missed--;
             }
 
-            v.uptime = calculateUptime(v.counts.signed, v.counts.missed);
+            // Update uptime based on slashing window if available, otherwise use current window
+            if (v.signingInfo && v.signingInfo.missed_blocks_counter !== undefined) {
+                v.uptime = calculateUptimeFromSlashingWindow(v.signingInfo.missed_blocks_counter, signedBlocksWindow);
+            } else {
+                v.uptime = ((v.counts.signed / (v.counts.signed + v.counts.missed)) * 100).toFixed(2) || "0.00";
+            }
         });
     };
 
@@ -247,15 +254,30 @@ export default function UptimePage() {
             });
 
             // Fetch Signing Info for Slashing Window status (total missed across window)
-            // Note: Requires proper address prefix
-            const signingInfoPromises = validators.map(v => {
-                if (!v.isActive) return Promise.resolve(null);
-                // We try to fetch bech32 consensus address if utility available;
-                // otherwise we skip this part to avoid crashing.
-                return Promise.resolve(null); 
+            const signingInfoPromises = validators.map(async (v) => {
+                if (!v.isActive || !v.valconsHex) return null;
+                try {
+                    // Convert hex to bech32 if needed, but for now try with hex format
+                    // Some chains accept hex addresses directly in the API
+                    const signingInfo = await fetchValidatorSigningInfo(v.valconsHex);
+                    return signingInfo;
+                } catch (e) {
+                    console.warn(`Failed to fetch signing info for ${v.moniker}:`, e);
+                    return null;
+                }
             });
             
-            await Promise.all(signingInfoPromises);
+            const signingInfos = await Promise.all(signingInfoPromises);
+            
+            // Update validators with signing info
+            validators.forEach((v, index) => {
+                v.signingInfo = signingInfos[index];
+                if (v.signingInfo && v.signingInfo.missed_blocks_counter !== undefined) {
+                    v.uptime = calculateUptimeFromSlashingWindow(v.signingInfo.missed_blocks_counter, signedBlocksWindow);
+                } else {
+                    v.uptime = "0.00";
+                }
+            });
 
             const status = await getNodeStatus();
             const latest = parseInt(status.sync_info.latest_block_height, 10);
