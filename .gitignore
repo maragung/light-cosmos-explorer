@@ -2,36 +2,32 @@
 # Dependencies
 node_modules/
 
-# Build artifacts
-dist/
-build/
-*.js
-
-# Logs and temp files
-*.log
-*.tmp
-
 # Environment
 .env
 .env.local
 *.env.*
 
-# Editors
+# Logs
+*.log
+
+# Build outputs
+dist/
+build/
+.next/
+out/
+
+# Editor
 .vscode/
 .idea/
+*.swp
+*.swo
+*.tmp
 
-# Python
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-
-# Coverage
-coverage/
-htmlcov/
-.coverage
-
-# System
+# OS
 .DS_Store
 Thumbs.db
+
+# Cache
+.cache/
+*.cache
 ```
