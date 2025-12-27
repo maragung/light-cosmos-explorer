@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { RefreshCcw, Wifi, Zap, Badge, Clock, TrendingUp, DollarSign, List, Search, Users, LayoutDashboard, ChevronLeft, HardHat, CheckCircle, XCircle, Settings, Globe, Cloud, Code, Minus, MessageSquare, Database, Share2, AlertTriangle } from 'lucide-react';
+import { RefreshCcw, Wifi, Zap, Badge, Clock, TrendingUp, DollarSign, List, Search, Users, LayoutDashboard, ChevronLeft, HardHat, CheckCircle, XCircle, Settings, Globe, Cloud, Code, Minus, MessageSquare, Database, Share2, AlertTriangle, Check, ChevronsDown } from 'lucide-react';
 import { bech32 } from 'bech32';
 import { Buffer } from 'buffer';
 
@@ -78,8 +78,8 @@ const getHexAddress = (operatorAddress) => {
 const RPC_CONFIGS = [
     {
         "label": "Warden Indonesia - Mainnet",
-        "COMETBFT_RPC_API": "https://rpc.warden.clogs.id",
-        "COSMOS_SDK_API": "https://api.warden.clogs.id",
+        "COMETBFT_RPC_API": "https://warden-mainnet-rpc.itrocket.net",
+        "COSMOS_SDK_API": "https://warden-mainnet-api.itrocket.net",
         "network": "mainnet"
     },
     {
@@ -103,21 +103,41 @@ const RPC_CONFIGS = [
 ];
 
 const useRpcConfig = () => {
-    const [selectedConfig, setSelectedConfig] = useState(() => {
-        if (typeof window !== 'undefined') {
-            const saved = localStorage.getItem('rpcConfig');
-            return saved ? JSON.parse(saved) : RPC_CONFIGS[0];
+    const [selectedConfig, setSelectedConfig] = useState(null);
+    const [isLoaded, setIsLoaded] = useState(false);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+
+        const saved = localStorage.getItem('rpcConfig');
+        let config = RPC_CONFIGS[0]; // Default fallback
+
+        if (saved) {
+            try {
+                const parsed = JSON.parse(saved);
+                const validConfig = RPC_CONFIGS.find(c => c.label === parsed.label);
+                if (validConfig) {
+                    config = validConfig;
+                }
+            } catch (e) {
+                console.warn('Invalid saved config, using default');
+            }
         }
-        return RPC_CONFIGS[0];
-    });
+
+        setSelectedConfig(config);
+        setIsLoaded(true);
+    }, []);
 
     const setRpcConfig = useCallback((config) => {
         setSelectedConfig(config);
-        localStorage.setItem('rpcConfig', JSON.stringify(config));
+        if (typeof window !== 'undefined') {
+            localStorage.setItem('rpcConfig', JSON.stringify(config));
+        }
     }, []);
 
-    return { selectedConfig, setRpcConfig };
+    return { selectedConfig, setRpcConfig, isLoaded };
 };
+
 
 const ROUTES = {
     DASHBOARD: 'DASHBOARD',
@@ -301,12 +321,14 @@ const useRouter = () => {
 };
 
 const useTheme = () => {
-    const [isDark, setIsDark] = useState(() => {
-        if (typeof window !== 'undefined') {
-            return localStorage.getItem('theme') !== 'light';
-        }
-        return true;
-    });
+    const [isDark, setIsDark] = useState(true);
+
+    useEffect(() => {
+        const saved = localStorage.getItem('theme');
+        const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        const initialDark = saved ? saved === 'dark' : prefersDark;
+        setIsDark(initialDark);
+    }, []);
 
     useEffect(() => {
         const root = document.documentElement;
@@ -3832,855 +3854,542 @@ const setCookie = (name, value, days = 365) => {
 
 import { createHash } from 'crypto';
 
+
 const UptimeView = ({ cometBftRpcApi, cosmosSdkApi, navigate, ROUTES }) => {
     const [results, setResults] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [search, setSearch] = useState("");
     const [isRefreshing, setIsRefreshing] = useState(false);
-    const [autoRefreshInterval, setAutoRefreshInterval] = useState(0);
-    const [filterStatus, setFilterStatus] = useState('active');
-    const [blockRange, setBlockRange] = useState(50);
+    const [autoRefreshInterval, setAutoRefreshInterval] = useState('auto');
+    const [filterStatus, setFilterStatus] = useState('all');
+    const [blockRange, setBlockRange] = useState(100);
     const [latestBlockHeight, setLatestBlockHeight] = useState(0);
     const [lastUpdateTime, setLastUpdateTime] = useState(null);
-    const [progress, setProgress] = useState(0);
-    const [hoveredBlock, setHoveredBlock] = useState(null);
-    const [tooltipPosition, setTooltipPosition] = useState({ x: 0, y: 0 });
-    
-    // Paging state
-    const [currentPage, setCurrentPage] = useState(1);
-    const [itemsPerPage, setItemsPerPage] = useState(50);
+    const [viewMode, setViewMode] = useState('grid');
 
-    // Fungsi untuk menangani hover pada block
-    const handleBlockHover = (blockHeight, emojiIndex, event) => {
-        const rect = event.target.getBoundingClientRect();
-        setHoveredBlock({ 
-            height: blockHeight, 
-            index: emojiIndex,
-            x: rect.left + rect.width / 2,
-            y: rect.top - 10
-        });
+    // Data Management State
+    const [blockDataLoaded, setBlockDataLoaded] = useState(false);
+    const [lastProcessedBlock, setLastProcessedBlock] = useState(0);
+    const blockCache = useMemo(() => new Map(), []);
+
+    // Lazy Loading State
+    const INITIAL_VISIBLE_COUNT = 15;
+    const LOAD_MORE_STEP = 15;
+    const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_COUNT);
+
+    // Slashing Params State
+    const [slashingParams, setSlashingParams] = useState(null);
+    const [signedBlocksWindow, setSignedBlocksWindow] = useState(10000);
+
+    // Refresh Intervals
+    const REFRESH_INTERVALS = {
+        'off': 0,
+        'auto': null,
+        '5s': 5000,
+        '10s': 10000,
+        '30s': 30000,
+        '60s': 60000
     };
 
-    // Fungsi untuk menangani klik pada block
-    const handleBlockClick = (blockHeight) => {
-        navigate(ROUTES.BLOCKS_DETAIL, { height: blockHeight });
+    const BLOCK_TIME = 5000; // 5 seconds average block time
+
+    const getAutoRefreshInterval = () => {
+        if (autoRefreshInterval === 'auto') {
+            return BLOCK_TIME + 1000;
+        }
+        return REFRESH_INTERVALS[autoRefreshInterval] || 0;
     };
 
-    // Fungsi derive valcons yang kompatibel dengan browser
-    const deriveValcons = (consensus_pubkey) => {
+    // Helper: Derive Consensus Address (Hex) from PubKey
+    const deriveValcons = async (consensus_pubkey) => {
         if (!consensus_pubkey || !consensus_pubkey.key) return null;
         try {
-            const keyBuf = Buffer.from(consensus_pubkey.key, "base64");
-            const hash = createHash("sha256").update(keyBuf).digest();
-            return hash.slice(0, 20).toString("hex").toUpperCase();
+            const keyString = atob(consensus_pubkey.key);
+            const keyBuf = new Uint8Array(keyString.length);
+            for (let i = 0; i < keyString.length; i++) {
+                keyBuf[i] = keyString.charCodeAt(i);
+            }
+            const hashBuffer = await crypto.subtle.digest('SHA-256', keyBuf);
+            const hashArray = Array.from(new Uint8Array(hashBuffer));
+            return hashArray.slice(0, 20).map(b => b.toString(16).padStart(2, '0')).join('').toUpperCase();
         } catch (e) {
             console.error("Error deriving valcons:", e);
             return null;
         }
     };
 
-    // Fetch semua bonded validators
-    const fetchAllBondedValidators = async () => {
+    // Fetch validator signing info
+    const fetchValidatorSigningInfo = async (valcons) => {
+        if (!valcons) return null;
+        try {
+            const url = `${cosmosSdkApi}/cosmos/slashing/v1beta1/signing_infos/${valcons}`;
+            const data = await fetchWithRetry(url);
+            return data.val_signing_info;
+        } catch (e) {
+            console.warn(`Failed to fetch signing info for ${valcons}:`, e.message);
+            return null;
+        }
+    };
+
+    const fetchSlashingParams = async () => {
+        try {
+            const data = await fetchWithRetry(`${cosmosSdkApi}/cosmos/slashing/v1beta1/params`);
+            if (data?.params) {
+                setSlashingParams(data.params);
+                const window = parseInt(data.params.signed_blocks_window || '10000', 10) || 10000;
+                setSignedBlocksWindow(window);
+            }
+        } catch (error) {
+            console.warn('Failed to fetch slashing params, using defaults (10000):', error);
+            setSignedBlocksWindow(10000);
+        }
+    };
+
+    const fetchAllValidators = async () => {
         const validators = [];
         let nextKey = null;
-        
+
         try {
             do {
-                const params = nextKey 
-                    ? `?pagination.key=${encodeURIComponent(nextKey)}` 
-                    : `?status=BOND_STATUS_BONDED`;
-                
+                const params = nextKey
+                    ? `?pagination.key=${encodeURIComponent(nextKey)}`
+                    : `?pagination.limit=200`;
+
                 const url = `${cosmosSdkApi}/cosmos/staking/v1beta1/validators${params}`;
                 const data = await fetchWithRetry(url);
-                
+
                 if (Array.isArray(data.validators)) {
-                    validators.push(...data.validators);
+                    for (const v of data.validators) {
+                        const valcons = await deriveValcons(v.consensus_pubkey);
+
+                        validators.push({
+                            moniker: v.description?.moniker || v.moniker || "unknown",
+                            operator_address: v.operator_address,
+                            jailed: !!v.jailed,
+                            status: v.status,
+                            tokens: v.tokens,
+                            consensus_pubkey: v.consensus_pubkey,
+                            valcons: valcons,
+                            patternWithHeights: [],
+                            counts: { signed: 0, missed: 0 },
+                            uptime: "0.00",
+                            isActive: v.status === 'BOND_STATUS_BONDED' && !v.jailed,
+                            isJailed: v.jailed,
+                            isUnbonding: v.status === 'BOND_STATUS_UNBONDING',
+                            isUnbonded: v.status === 'BOND_STATUS_UNBONDED',
+                            signingInfo: null,
+                        });
+                    }
                 }
-                
-                nextKey = data.pagination && data.pagination.next_key ? data.pagination.next_key : null;
-                
-                await new Promise(resolve => setTimeout(resolve, 80));
-                
+                nextKey = data.pagination?.next_key;
             } while (nextKey);
         } catch (e) {
             throw new Error(`Failed to fetch validators: ${e.message}`);
         }
-        
         return validators;
     };
 
-    // Get node status
     const getNodeStatus = async () => {
         const data = await fetchWithRetry(`${cometBftRpcApi}/status`);
         return data.result;
     };
 
-    // Get block by height
     const getBlockByHeight = async (height) => {
-        const data = await fetchWithRetry(`${cometBftRpcApi}/block?height=${height}`);
-        return data.result;
-    };
-
-    // Normalize signature address
-    const normalizeSigAddr = (s) => {
-        if (!s) return null;
-        if (s.validator_address) return s.validator_address.toString().toUpperCase();
-        if (s.address) return s.address.toString().toUpperCase();
-        return null;
-    };
-
-    // Main function
-    const loadData = async (isBackgroundRefresh = false) => {
-        if (!isBackgroundRefresh) {
-            setLoading(true);
-        }
-        setError(null);
-
+        if (blockCache.has(height)) return blockCache.get(height);
         try {
-            console.log(`⏳ Fetching bonded validators from ${cosmosSdkApi} ...`);
-            const rawValidators = await fetchAllBondedValidators();
-            console.log(`✅ Found ${rawValidators.length} bonded validators.`);
+            const data = await fetchWithRetry(`${cometBftRpcApi}/block?height=${height}`);
+            if (blockCache.size > 200) {
+                const firstKey = blockCache.keys().next().value;
+                if (firstKey) blockCache.delete(firstKey);
+            }
+            blockCache.set(height, data.result);
+            return data.result;
+        } catch (error) {
+            console.warn(`Failed to fetch block ${height}:`, error);
+            throw error;
+        }
+    };
 
-            // Build validatorsList dengan derived valcons
-            const validatorsList = rawValidators.map(v => {
-                const valcons = deriveValcons(v.consensus_pubkey);
-                
-                return {
-                    moniker: (v.description && v.description.moniker) 
-                        ? v.description.moniker 
-                        : (v.moniker || "unknown"),
-                    operator_address: v.operator_address || null,
-                    jailed: !!v.jailed,
-                    status: v.status || null,
-                    tokens: v.tokens || v.delegator_shares || null,
-                    consensus_pubkey: v.consensus_pubkey || null,
-                    valcons: valcons,
-                    lastN: []
-                };
+    const calculateUptime = (signed, missed) => {
+        const total = signed + missed;
+        if (total === 0) return "0.00";
+        return ((signed / total) * 100).toFixed(2);
+    }
+
+    const processBlockData = (blockRes, validators) => {
+        const block = blockRes.block;
+        const lastCommit = block.last_commit || {};
+        const sigs = Array.isArray(lastCommit.signatures) ? lastCommit.signatures : [];
+        const currentBlockRange = Number(blockRange);
+
+        const validSigners = new Set(sigs.filter(s => {
+            const isSigned = (s.block_id_flag !== undefined && s.block_id_flag === 2) || (s.signature && s.signature.length > 0);
+            return isSigned;
+        }).map(s => s.validator_address ? s.validator_address.toUpperCase() : ""));
+
+        validators.forEach((v) => {
+            if (!v.valcons) return;
+
+            const signed = validSigners.has(v.valcons);
+
+            v.patternWithHeights.push({
+                height: parseInt(block.header.height),
+                signed: signed,
+                timestamp: block.header?.time
             });
 
-            // Build lookup map
-            const valconsToIndex = new Map();
-            validatorsList.forEach((val, i) => {
-                if (val.valcons) {
-                    valconsToIndex.set(val.valcons.toUpperCase(), i);
+            let tempSigned = v.counts.signed + (signed ? 1 : 0);
+            let tempMissed = v.counts.missed + (signed ? 0 : 1);
+
+            if (v.patternWithHeights.length > currentBlockRange) {
+                const removed = v.patternWithHeights.shift();
+
+                if (removed) {
+                    if (removed.signed) tempSigned--;
+                    else tempMissed--;
                 }
+            }
+
+            v.counts.signed = tempSigned;
+            v.counts.missed = tempMissed;
+            v.uptime = calculateUptime(v.counts.signed, v.counts.missed);
+        });
+    };
+
+    const loadInitialData = async () => {
+        setLoading(true);
+        setError(null);
+        setVisibleCount(INITIAL_VISIBLE_COUNT);
+        try {
+            await fetchSlashingParams();
+            const validators = await fetchAllValidators();
+
+            validators.sort((a, b) => {
+                const powerA = BigInt(a.tokens || '0');
+                const powerB = BigInt(b.tokens || '0');
+                return powerB > powerA ? 1 : -1;
             });
 
-            console.log(`🗺️ Built valcons mapping for ${valconsToIndex.size} validators`);
+            const signingInfoPromises = validators.map(v =>
+                v.valcons ? fetchValidatorSigningInfo(v.valcons) : Promise.resolve(null)
+            );
+            const allSigningInfo = await Promise.all(signingInfoPromises);
 
-            // Get latest height
-            console.log("⏳ Getting latest block height from RPC...");
+            const validatorsWithInfo = validators.map((v, index) => ({
+                ...v,
+                signingInfo: allSigningInfo[index]
+                    ? {
+                        missed_blocks_counter: parseInt(allSigningInfo[index].missed_blocks_counter || '0', 10),
+                        tombstoned: allSigningInfo[index].tombstoned
+                    }
+                    : null,
+                patternWithHeights: [],
+                counts: { signed: 0, missed: 0 },
+                uptime: "0.00",
+            }));
+
             const status = await getNodeStatus();
             const latest = parseInt(status.sync_info.latest_block_height, 10);
-            const start = Math.max(1, latest - (blockRange - 1));
-            
+
             setLatestBlockHeight(latest);
             setLastUpdateTime(new Date());
-            
-            console.log(`🔎 Will check blocks ${start} .. ${latest} (${blockRange} blocks)`);
 
-            let processedBlocks = 0;
-            let totalSignatures = 0;
+            setResults(validatorsWithInfo);
 
-            // Process blocks
-            for (let h = start; h <= latest; h++) {
-                // Check if we should stop due to auto refresh being turned off
-                if (isBackgroundRefresh && autoRefreshInterval === 0) {
-                    console.log('Auto refresh turned off, stopping background process');
-                    break;
-                }
-
-                try {
-                    const blockRes = await getBlockByHeight(h);
-                    const block = blockRes.block;
-                    const lastCommit = block.last_commit || block.commit || {};
-                    const sigEntries = Array.isArray(lastCommit.signatures) 
-                        ? lastCommit.signatures 
-                        : (lastCommit.signatures || []);
-                    
-                    const sigAddrs = sigEntries.map(normalizeSigAddr).filter(Boolean).map(s => s.toUpperCase());
-                    const signerSet = new Set(sigAddrs);
-
-                    // Untuk setiap validator, push signed status
-                    validatorsList.forEach(v => {
-                        let signed = null;
-                        if (v.valcons) {
-                            signed = signerSet.has(v.valcons.toUpperCase());
-                            if (signed) totalSignatures++;
-                        }
-                        
-                        v.lastN.push({
-                            height: h,
-                            time: block.header?.time || null,
-                            signed
-                        });
-                    });
-
-                    processedBlocks++;
-                    
-                    // Update progress untuk background refresh
-                    if (isBackgroundRefresh) {
-                        setProgress(Math.round((processedBlocks / blockRange) * 100));
-                    }
-                    
-                } catch (err) {
-                    console.warn(`Failed to fetch block ${h}:`, err.message);
-                    
-                    // Push error entries
-                    validatorsList.forEach(v => {
-                        v.lastN.push({ 
-                            height: h, 
-                            time: null, 
-                            signed: null, 
-                            error: `block fetch failed: ${err.message}` 
-                        });
-                    });
-                    
-                    processedBlocks++;
-                }
-                
-                // Delay
-                await new Promise(resolve => setTimeout(resolve, 50));
-            }
-
-            console.log(`✅ Processed ${processedBlocks} blocks, found ${totalSignatures} signatures`);
-
-            // Build results
-            const finalResults = validatorsList.map(v => {
-                const arr = v.lastN.slice(-blockRange);
-                
-                // Generate pattern dengan informasi height untuk setiap block
-                const patternWithHeights = arr.map((block, index) => ({
-                    emoji: block.signed === true ? "🟩" : block.signed === false ? "🟥" : "⬜",
-                    height: block.height,
-                    signed: block.signed,
-                    index: index
-                }));
-
-                // Hitung counts
-                const signedCount = arr.reduce((acc, b) => acc + (b.signed === true ? 1 : 0), 0);
-                const missedCount = arr.reduce((acc, b) => acc + (b.signed === false ? 1 : 0), 0);
-                const unknownCount = arr.reduce((acc, b) => acc + (b.signed === null ? 1 : 0), 0);
-
-                return {
-                    moniker: v.moniker,
-                    operator_address: v.operator_address,
-                    valcons: v.valcons,
-                    jailed: v.jailed,
-                    tokens: v.tokens,
-                    patternWithHeights,
-                    counts: { 
-                        signed: signedCount, 
-                        missed: missedCount, 
-                        unknown: unknownCount 
-                    },
-                    lastN: arr,
-                    uptime: blockRange > 0 ? ((signedCount / blockRange) * 100).toFixed(2) : "0.00",
-                    isActive: v.status === 'BOND_STATUS_BONDED' && !v.jailed,
-                    isJailed: v.jailed,
-                    isUnbonding: v.status === 'BOND_STATUS_UNBONDING',
-                    isUnbonded: v.status === 'BOND_STATUS_UNBONDED'
-                };
-            });
-
-            // Sort by voting power descending
-            finalResults.sort((a, b) => {
-                try {
-                    const powerA = BigInt(a.tokens || '0');
-                    const powerB = BigInt(b.tokens || '0');
-                    return powerB > powerA ? 1 : -1;
-                } catch (e) {
-                    return 0;
-                }
-            });
-
-            console.log(`📊 Processed ${finalResults.length} validators`);
-            setResults(finalResults);
-            setProgress(100);
+            setBlockDataLoaded(true);
+            setLoading(false);
 
         } catch (e) {
-            console.error("Fatal error:", e);
+            console.error("Initial load error:", e);
             setError(e.message);
+            setLoading(false);
         } finally {
-            if (!isBackgroundRefresh) {
-                setLoading(false);
-            }
             setIsRefreshing(false);
-            // Reset progress setelah selesai
-            setTimeout(() => setProgress(0), 1000);
         }
     };
 
-    // Effects untuk initial load
-    useEffect(() => {
-        loadData(false);
-    }, [blockRange]);
+    const incrementalUpdate = async () => {
+        if (!blockDataLoaded || isRefreshing) return;
 
-    // Effects untuk auto refresh
+        setIsRefreshing(true);
+        try {
+            const status = await getNodeStatus();
+            const currentLatest = parseInt(status.sync_info.latest_block_height, 10);
+
+            setLatestBlockHeight(currentLatest);
+            setLastUpdateTime(new Date());
+
+            if (currentLatest <= lastProcessedBlock) {
+                setIsRefreshing(false);
+                return;
+            }
+
+            const updatedValidators = [...results];
+
+            for (let h = lastProcessedBlock + 1; h <= currentLatest; h++) {
+                try {
+                    const blockRes = await getBlockByHeight(h);
+                    processBlockData(blockRes, updatedValidators);
+                } catch (err) {
+                    console.warn(`Failed to fetch new block ${h}`, err);
+                }
+            }
+
+            setResults(updatedValidators);
+            setLastProcessedBlock(currentLatest);
+
+        } catch (error) {
+            console.error('Incremental update error:', error);
+        } finally {
+            setIsRefreshing(false);
+        }
+    };
+
+    useEffect(() => {
+        loadInitialData();
+    }, []);
+
     useEffect(() => {
         let intervalId;
+        const interval = getAutoRefreshInterval();
 
-        if (autoRefreshInterval > 0) {
-            intervalId = setInterval(async () => {
-                if (!isRefreshing) {
-                    console.log(`🔄 Auto-refreshing uptime data every ${autoRefreshInterval}ms...`);
-                    setIsRefreshing(true);
-                    await loadData(true);
-                }
-            }, autoRefreshInterval);
+        if (interval > 0 && blockDataLoaded) {
+            intervalId = setInterval(incrementalUpdate, interval);
         }
+        return () => clearInterval(intervalId);
+    }, [autoRefreshInterval, blockDataLoaded, lastProcessedBlock]);
 
-        return () => {
-            if (intervalId) {
-                clearInterval(intervalId);
-            }
-        };
-    }, [autoRefreshInterval, isRefreshing, blockRange]);
+    useEffect(() => {
+        if (blockDataLoaded) {
+            loadInitialData();
+        }
+    }, [blockRange]);
 
-    // Filter results
+    const handleManualRefresh = () => {
+        const previousInterval = autoRefreshInterval;
+        setAutoRefreshInterval('off');
+        loadInitialData().finally(() => {
+            incrementalUpdate().finally(() => {
+                setAutoRefreshInterval(previousInterval);
+            });
+        });
+    };
+
+    const handleLoadMore = () => {
+        setVisibleCount(prevCount => prevCount + LOAD_MORE_STEP);
+    };
+
     const filteredResults = useMemo(() => {
         let filtered = results;
-
-        if (filterStatus === 'active') {
-            filtered = filtered.filter(v => v.isActive);
-        } else if (filterStatus === 'jailed') {
-            filtered = filtered.filter(v => v.isJailed);
-        } else if (filterStatus === 'unbonding') {
-            filtered = filtered.filter(v => v.isUnbonding);
-        } else if (filterStatus === 'unbonded') {
-            filtered = filtered.filter(v => v.isUnbonded);
-        }
+        if (filterStatus === 'active') filtered = filtered.filter(v => v.isActive);
+        else if (filterStatus === 'jailed') filtered = filtered.filter(v => v.isJailed);
+        else if (filterStatus === 'unbonding') filtered = filtered.filter(v => v.isUnbonding);
 
         if (search.trim()) {
             const term = search.toLowerCase().trim();
-            filtered = filtered.filter(v => 
-                v.moniker.toLowerCase().includes(term) ||
-                (v.operator_address && v.operator_address.toLowerCase().includes(term))
-            );
+            filtered = filtered.filter(v => v.moniker.toLowerCase().includes(term) || (v.operator_address && v.operator_address.toLowerCase().includes(term)));
         }
-
         return filtered;
     }, [results, filterStatus, search]);
 
-    // Paging logic
-    const totalPages = Math.ceil(filteredResults.length / itemsPerPage);
-    const startIndex = (currentPage - 1) * itemsPerPage;
-    const endIndex = startIndex + itemsPerPage;
-    const paginatedResults = filteredResults.slice(startIndex, endIndex);
+    const displayedResults = useMemo(() => {
+        return filteredResults.slice(0, visibleCount);
+    }, [filteredResults, visibleCount]);
 
-    // Reset to page 1 when filters change
-    useEffect(() => {
-        setCurrentPage(1);
-    }, [filterStatus, search, itemsPerPage]);
-
-    // Format voting power
     const formatVotingPower = (tokens) => {
-        try {
-            return convertRawVotingPower(tokens, 18);
-        } catch (e) {
-            return "0";
-        }
+        try { return convertRawVotingPower(tokens, 18); } catch (e) { return "0"; }
     };
 
-    // Handle refresh manual
-    const handleRefresh = async () => {
-        setIsRefreshing(true);
-        await loadData(true);
-    };
+    const handleBlockClick = (height) => navigate(ROUTES.BLOCKS_DETAIL, { height });
 
-    // Handle page change
-    const handlePageChange = (newPage) => {
-        setCurrentPage(newPage);
-        // Scroll to top when page changes
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-    };
+    const BlockPattern = ({ patternWithHeights, blockRange }) => {
+        const blocks = patternWithHeights;
 
-    // Komponen untuk menampilkan pattern dengan tooltip
-    const BlockPattern = ({ patternWithHeights, validatorMoniker }) => {
         return (
-            <div className="relative">
-                <div 
-                    className="text-xs font-mono leading-tight flex"
-                    style={{ fontFamily: 'monospace', letterSpacing: '-0.5px' }}
-                    onMouseLeave={() => setHoveredBlock(null)}
-                >
-                    {patternWithHeights.map((block, index) => (
-                        <span
-                            key={`${block.height}-${index}`}
-                            className="cursor-pointer hover:scale-110 transition-transform duration-150 relative"
-                            onMouseEnter={(e) => handleBlockHover(block.height, index, e)}
-                            onClick={() => handleBlockClick(block.height)}
-                            title={`Block #${block.height}`}
-                        >
-                            {block.emoji}
-                        </span>
-                    ))}
-                </div>
-
-                {/* Tooltip */}
-                {hoveredBlock && (
-                    <div 
-                        className="fixed z-50 px-2 py-1 bg-gray-900 text-white text-xs rounded shadow-lg border border-gray-700 pointer-events-none"
-                        style={{
-                            left: `${hoveredBlock.x}px`,
-                            top: `${hoveredBlock.y}px`,
-                            transform: 'translateX(-50%)'
-                        }}
-                    >
-                        Block #{hoveredBlock.height}
-                        <div className="absolute bottom-0 left-1/2 transform -translate-x-1/2 translate-y-1 w-2 h-2 bg-gray-900 rotate-45 border-b border-r border-gray-700"></div>
-                    </div>
-                )}
+            <div className="flex flex-wrap gap-0.5 justify-center">
+                {blocks.map((p, i) => (
+                    <div
+                        key={`${p.height}-${i}`}
+                        title={`Blok #${p.height}: ${p.signed ? 'Signed' : 'Missed'} (${new Date(p.timestamp).toLocaleTimeString()})`}
+                        className={`w-1.5 h-4 cursor-pointer hover:scale-125 transition-transform rounded-sm ${p.signed ? 'bg-green-500' : 'bg-red-500'
+                            }`}
+                        onClick={(e) => { e.stopPropagation(); handleBlockClick(p.height); }}
+                    />
+                ))}
             </div>
         );
     };
-
-    // Komponen untuk mobile pattern
-    const MobileBlockPattern = ({ patternWithHeights, validatorMoniker }) => {
-        return (
-            <div className="relative">
-                <div 
-                    className="text-xs font-mono leading-tight overflow-x-auto whitespace-nowrap flex"
-                    style={{ fontFamily: 'monospace' }}
-                    onMouseLeave={() => setHoveredBlock(null)}
-                >
-                    {patternWithHeights.map((block, index) => (
-                        <span
-                            key={`${block.height}-${index}`}
-                            className="cursor-pointer hover:scale-110 transition-transform duration-150 relative"
-                            onMouseEnter={(e) => handleBlockHover(block.height, index, e)}
-                            onClick={() => handleBlockClick(block.height)}
-                            title={`Block #${block.height}`}
-                        >
-                            {block.emoji}
-                        </span>
-                    ))}
-                </div>
-            </div>
-        );
-    };
-
-    if (loading) {
-        return <Loader message="Loading validator uptime data..." />;
-    }
-
-    if (error) {
-        return (
-            <div className="p-4">
-                <div className="bg-red-900 border-l-4 border-red-500 text-red-200 p-4 rounded-lg">
-                    <p className="font-semibold">Error Loading Uptime Data</p>
-                    <p className="text-sm mt-1">{error}</p>
-                    <button 
-                        onClick={() => loadData(false)}
-                        className="mt-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition duration-200"
-                    >
-                        Try Again
-                    </button>
-                </div>
-            </div>
-        );
-    }
 
     return (
         <div className="p-4 space-y-6">
-            {/* Header dengan progress indicator */}
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-                <div className="flex items-center space-x-4">
-                    <h2 className="text-2xl font-bold text-green-400">Validator Uptime</h2>
-                    {isRefreshing && (
-                        <div className="flex items-center space-x-2">
-                            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-green-400"></div>
-                            <span className="text-sm text-green-400">
-                                {progress > 0 ? `Refreshing... ${progress}%` : 'Refreshing...'}
-                            </span>
-                        </div>
-                    )}
-                </div>
-                <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
-                    {lastUpdateTime && (
-                        <span className="text-sm text-gray-400">
-                            Updated: {lastUpdateTime.toLocaleTimeString()}
-                        </span>
-                    )}
+                <h2 className="text-2xl font-bold text-green-400">Validator Uptime</h2>
+
+                <div className="flex items-center gap-2">
                     <button
-                        onClick={handleRefresh}
+                        onClick={handleManualRefresh}
                         disabled={isRefreshing}
-                        className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition duration-200 flex items-center disabled:opacity-50"
+                        className="bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-lg transition disabled:opacity-50 flex items-center justify-center text-sm"
+                        title="Manual Refresh Data"
                     >
                         <RefreshCcw className={`w-4 h-4 mr-2 ${isRefreshing ? 'animate-spin' : ''}`} />
-                        Refresh
+                        {isRefreshing ? 'Syncing...' : 'Refresh'}
                     </button>
-                </div>
-            </div>
 
-            {/* Summary Cards - Responsive */}
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4 mb-6">
-                <div className="bg-gray-800 p-3 md:p-4 rounded-lg neon-border">
-                    <div className="text-xs md:text-sm text-gray-400 mb-1">Validators</div>
-                    <div className="text-lg md:text-2xl font-bold text-white">{results.length}</div>
-                </div>
-                <div className="bg-gray-800 p-3 md:p-4 rounded-lg neon-border">
-                    <div className="text-xs md:text-sm text-gray-400 mb-1">Latest Block</div>
-                    <div className="text-lg md:text-2xl font-bold text-green-400">{latestBlockHeight.toLocaleString()}</div>
-                </div>
-                <div className="bg-gray-800 p-3 md:p-4 rounded-lg neon-border">
-                    <div className="text-xs md:text-sm text-gray-400 mb-1">Block Range</div>
-                    <div className="text-lg md:text-2xl font-bold text-blue-400">{blockRange}</div>
-                </div>
-                <div className="bg-gray-800 p-3 md:p-4 rounded-lg neon-border">
-                    <div className="text-xs md:text-sm text-gray-400 mb-1">Active</div>
-                    <div className="text-lg md:text-2xl font-bold text-green-400">
-                        {results.filter(v => v.isActive).length}
+                    <div className="flex bg-gray-800 rounded-lg p-1">
+                        <button onClick={() => setViewMode('grid')} className={`px-4 py-2 rounded-md text-sm transition ${viewMode === 'grid' ? 'bg-green-600 text-white' : 'text-gray-400 hover:text-white'}`}>Grid</button>
+                        <button onClick={() => setViewMode('list')} className={`px-4 py-2 rounded-md text-sm transition ${viewMode === 'list' ? 'bg-green-600 text-white' : 'text-gray-400 hover:text-white'}`}>List</button>
                     </div>
                 </div>
             </div>
 
-            {/* Controls - Responsive dengan layout baru */}
-            <div className="bg-gray-800 p-4 md:p-6 rounded-xl shadow-lg neon-border">
-                {/* Search Bar */}
-                <div className="mb-6">
-                    <label className="block text-sm font-medium text-gray-300 mb-2">
-                        Search Validators
-                    </label>
-                    <div className="relative">
-                        <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
+            <div className="bg-gray-800 p-4 rounded-xl shadow-lg neon-border space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+
+                    <div>
+                        <label className="text-xs text-gray-500 uppercase">Search Validator</label>
                         <input
                             type="text"
-                            placeholder="Search by moniker or address..."
+                            placeholder="Name / Operator Address"
                             value={search}
                             onChange={(e) => setSearch(e.target.value)}
-                            className="w-full pl-10 pr-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent text-sm md:text-base"
+                            className="w-full mt-1 bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white focus:outline-none focus:border-green-500"
                         />
                     </div>
-                </div>
 
-                {/* Control Grid */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-                    {/* Status Filter */}
                     <div>
-                        <label className="block text-sm font-medium text-gray-300 mb-2">
-                            Status
-                        </label>
+                        <label className="text-xs text-gray-500 uppercase">Status</label>
                         <select
                             value={filterStatus}
                             onChange={(e) => setFilterStatus(e.target.value)}
-                            className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent text-sm"
+                            className="w-full mt-1 bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white focus:outline-none focus:border-green-500"
                         >
-                            <option value="all">All Validators</option>
+                            <option value="all">All</option>
                             <option value="active">Active</option>
                             <option value="jailed">Jailed</option>
                             <option value="unbonding">Unbonding</option>
-                            <option value="unbonded">Unbonded</option>
                         </select>
                     </div>
 
-                    {/* Blocks Range */}
                     <div>
-                        <label className="block text-sm font-medium text-gray-300 mb-2">
-                            Blocks
-                        </label>
+                        <label className="text-xs text-gray-500 uppercase">Window Size (Visualization)</label>
                         <select
                             value={blockRange}
                             onChange={(e) => setBlockRange(Number(e.target.value))}
-                            className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent text-sm"
+                            className="w-full mt-1 bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white focus:outline-none focus:border-green-500"
                         >
-                            <option value={10}>10 blocks</option>
-                            <option value={50}>50 blocks</option>
-                            <option value={100}>100 blocks</option>
+                            <option value={50}>Last 50 Blocks</option>
+                            <option value={100}>Last 100 Blocks</option>
+                            <option value={200}>Last 200 Blocks</option>
                         </select>
                     </div>
 
-                    {/* Auto Refresh */}
                     <div>
-                        <label className="block text-sm font-medium text-gray-300 mb-2">
-                            Auto refresh
-                        </label>
+                        <label className="text-xs text-gray-500 uppercase">Auto Refresh</label>
                         <select
                             value={autoRefreshInterval}
-                            onChange={(e) => setAutoRefreshInterval(Number(e.target.value))}
-                            className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent text-sm"
+                            onChange={(e) => setAutoRefreshInterval(e.target.value)}
+                            className="w-full mt-1 bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white focus:outline-none focus:border-green-500"
                         >
-                            <option value={0}>Off</option>
-                            <option value={3000}>3s</option>
-                            <option value={5000}>5s</option>
-                            <option value={15000}>15s</option>
-                            <option value={30000}>30s</option>
-                            <option value={60000}>60s</option>
+                            <option value="off">Disabled</option>
+                            <option value="auto">Auto (per Block)</option>
+                            <option value="5s">5 Seconds</option>
+                            <option value="10s">10 Seconds</option>
+                            <option value="30s">30 Seconds</option>
+                            <option value="60s">60 Seconds</option>
                         </select>
                     </div>
                 </div>
 
-                {/* Items Per Page Selector */}
-                <div className="flex justify-between items-center mb-4">
-                    <div className="flex items-center space-x-2">
-                        <label className="text-sm text-gray-300">Show:</label>
-                        <select
-                            value={itemsPerPage}
-                            onChange={(e) => setItemsPerPage(Number(e.target.value))}
-                            className="px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm focus:outline-none focus:ring-1 focus:ring-green-500"
-                        >
-                            <option value={10}>10</option>
-                            <option value={25}>25</option>
-                            <option value={50}>50</option>
-                            <option value={100}>100</option>
-                        </select>
-                        <span className="text-sm text-gray-400">validators per page</span>
-                    </div>
-                    
-                    <div className="text-sm text-gray-400">
-                        {filteredResults.length > 0 ? (
-                            `Showing ${startIndex + 1}-${Math.min(endIndex, filteredResults.length)} of ${filteredResults.length} validators`
-                        ) : 'No validators found'}
-                    </div>
+                <div className="flex items-end justify-between text-xs text-gray-400 pt-4 border-t border-gray-700">
+                    <div>Latest Block: <span className="text-green-400 font-mono font-bold">{latestBlockHeight.toLocaleString()}</span></div>
+                    <div>Total Validators: <span className="text-white font-bold">{results.length}</span></div>
+                    <div>Last Processed Block: <span className="text-green-400 font-mono font-bold">{lastProcessedBlock.toLocaleString()}</span></div>
+                    <div>Last Updated: {lastUpdateTime ? lastUpdateTime.toLocaleTimeString() : 'Never'}</div>
                 </div>
+            </div>
 
-                {/* Legend dengan instruksi interaksi */}
-                <div className="bg-gray-750 p-3 md:p-4 rounded-lg mb-6">
-                    <h3 className="text-md md:text-lg font-semibold text-white mb-2">Legend & Interaction</h3>
-                    <div className="flex flex-wrap gap-3 md:gap-4 text-xs md:text-sm mb-2">
-                        <div className="flex items-center space-x-2">
-                            <span>🟩</span>
-                            <span className="text-gray-300">signed</span>
-                        </div>
-                        <div className="flex items-center space-x-2">
-                            <span>🟥</span>
-                            <span className="text-gray-300">missed</span>
-                        </div>
-                        <div className="flex items-center space-x-2">
-                            <span>⬜</span>
-                            <span className="text-gray-300">unknown</span>
-                        </div>
-                    </div>
-                    <p className="text-xs text-gray-400">
-                        💡 Hover over blocks to see block numbers • Click to view block details
-                    </p>
+            {loading ? (
+                <Loader message="Fetching Validators Data..." />
+            ) : error ? (
+                <div className="bg-red-900 border-l-4 border-red-500 p-4 rounded text-white">
+                    <h3 className="font-bold">Error</h3>
+                    <p className="text-sm">{error}</p>
+                    <button onClick={handleManualRefresh} className="mt-2 bg-red-800 hover:bg-red-700 px-3 py-1 rounded text-xs">Retry</button>
                 </div>
-
-                {/* Results Table - Responsive */}
-                <div className="overflow-x-auto">
-                    {paginatedResults.length > 0 ? (
-                        <div className="min-w-full">
-                            {/* Desktop Table */}
-                            <div className="hidden lg:block">
-                                <table className="min-w-full divide-y divide-gray-700">
-                                    <thead className="bg-gray-750">
-                                        <tr>
-                                            <th className="px-4 py-3 text-left text-xs font-bold text-green-400 uppercase">
-                                                Rank
-                                            </th>
-                                            <th className="px-4 py-3 text-left text-xs font-bold text-green-400 uppercase">
-                                                Validator
-                                            </th>
-                                            <th className="px-4 py-3 text-left text-xs font-bold text-green-400 uppercase">
-                                                Voting Power
-                                            </th>
-                                            <th className="px-4 py-3 text-left text-xs font-bold text-green-400 uppercase">
-                                                Status
-                                            </th>
-                                            <th className="px-4 py-3 text-left text-xs font-bold text-green-400 uppercase">
-                                                Uptime
-                                            </th>
-                                            <th className="px-4 py-3 text-left text-xs font-bold text-green-400 uppercase">
-                                                Pattern ({blockRange} blocks)
-                                            </th>
-                                            <th className="px-4 py-3 text-left text-xs font-bold text-green-400 uppercase">
-                                                Count
-                                            </th>
-                                        </tr>
-                                    </thead>
-                                    <tbody className="bg-gray-800 divide-y divide-gray-700">
-                                        {paginatedResults.map((validator, index) => (
-                                            <tr key={validator.operator_address} className="hover:bg-gray-750 transition duration-150">
-                                                <td className="px-4 py-3 text-sm text-gray-300">
-                                                    #{startIndex + index + 1}
-                                                </td>
-                                                <td className="px-4 py-3">
-                                                    <div 
-                                                        className="cursor-pointer"
-                                                        onClick={() => navigate(ROUTES.VALIDATOR_DETAIL, { address: validator.operator_address })}
-                                                    >
-                                                        <div className="text-sm font-medium text-white hover:text-green-300 transition duration-200">
-                                                            {validator.moniker}
-                                                        </div>
-                                                        <div className="text-xs text-gray-400 font-mono truncate max-w-xs">
-                                                            {validator.operator_address}
-                                                        </div>
-                                                    </div>
-                                                </td>
-                                                <td className="px-4 py-3 text-sm text-gray-300 font-mono">
-                                                    {formatVotingPower(validator.tokens)}
-                                                </td>
-                                                <td className="px-4 py-3">
-                                                    <span className={`px-2 py-1 text-xs font-semibold rounded ${
-                                                        validator.isActive 
-                                                            ? 'bg-green-600 text-green-100' 
-                                                            : validator.isJailed 
-                                                            ? 'bg-red-600 text-red-100'
-                                                            : 'bg-yellow-600 text-yellow-100'
-                                                    }`}>
-                                                        {validator.isActive ? 'Active' : validator.isJailed ? 'Jailed' : validator.status?.replace('BOND_STATUS_', '')}
-                                                    </span>
-                                                </td>
-                                                <td className="px-4 py-3">
-                                                    <div className="text-sm font-bold text-green-400">
-                                                        {validator.uptime}%
-                                                    </div>
-                                                </td>
-                                                <td className="px-4 py-3">
-                                                    <BlockPattern 
-                                                        patternWithHeights={validator.patternWithHeights}
-                                                        validatorMoniker={validator.moniker}
-                                                    />
-                                                </td>
-                                                <td className="px-4 py-3 text-sm text-gray-300">
-                                                    {validator.counts.signed}/{blockRange}
-                                                    {validator.counts.unknown > 0 && (
-                                                        <div className="text-xs text-gray-400">
-                                                            ({validator.counts.unknown} unknown)
-                                                        </div>
-                                                    )}
-                                                </td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
-                            </div>
-
-                            {/* Mobile Cards */}
-                            <div className="lg:hidden space-y-4">
-                                {paginatedResults.map((validator, index) => (
-                                    <div key={validator.operator_address} className="bg-gray-750 p-4 rounded-lg border-l-4 border-green-500">
-                                        <div className="flex justify-between items-start mb-3">
-                                            <div className="flex-1">
-                                                <div className="flex items-center space-x-2 mb-2">
-                                                    <span className="text-xs text-gray-400">#{startIndex + index + 1}</span>
-                                                    <span className={`px-2 py-1 text-xs font-semibold rounded ${
-                                                        validator.isActive 
-                                                            ? 'bg-green-600 text-green-100' 
-                                                            : validator.isJailed 
-                                                            ? 'bg-red-600 text-red-100'
-                                                            : 'bg-yellow-600 text-yellow-100'
-                                                    }`}>
-                                                        {validator.isActive ? 'Active' : validator.isJailed ? 'Jailed' : validator.status?.replace('BOND_STATUS_', '')}
-                                                    </span>
-                                                </div>
-                                                <h3 
-                                                    className="text-sm font-bold text-white mb-1 cursor-pointer hover:text-green-300"
-                                                    onClick={() => navigate(ROUTES.VALIDATOR_DETAIL, { address: validator.operator_address })}
-                                                >
-                                                    {validator.moniker}
-                                                </h3>
-                                                <p className="text-xs text-gray-400 font-mono truncate">
-                                                    {validator.operator_address}
-                                                </p>
-                                            </div>
-                                            <div className="text-right">
-                                                <div className="text-sm font-bold text-green-400 mb-1">
-                                                    {validator.uptime}%
-                                                </div>
-                                                <div className="text-xs text-gray-300">
-                                                    {validator.counts.signed}/{blockRange}
-                                                </div>
-                                            </div>
+            ) : (
+                <>
+                    <div className={viewMode === 'grid' ? "grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4" : "space-y-3"}>
+                        {displayedResults.map((v) => (
+                            <div key={v.operator_address} className="bg-gray-800 rounded-lg p-4 shadow-lg hover:bg-gray-750 transition border border-gray-700 cursor-pointer" onClick={() => navigate(ROUTES.VALIDATOR_DETAIL, { address: v.operator_address })}>
+                                <div className="flex justify-between items-start mb-3">
+                                    <div className="overflow-hidden">
+                                        <h3 className="font-bold text-white truncate text-lg cursor-pointer hover:text-green-400 transition">{v.moniker}</h3>
+                                        <div className="flex items-center space-x-2 mt-1">
+                                            {v.jailed ? <span className="text-xs bg-red-600 px-2 py-0.5 rounded text-white">Jailed</span> : v.status === 'BOND_STATUS_BONDED' ? <span className="text-xs bg-green-600 px-2 py-0.5 rounded text-white">Active</span> : <span className="text-xs bg-yellow-600 px-2 py-0.5 rounded text-white">{v.status.replace('BOND_STATUS_', '')}</span>}
+                                            <span className="text-xs text-gray-400 font-mono">{formatVotingPower(v.tokens)} WARD</span>
                                         </div>
-                                        
-                                        <div className="mb-3">
-                                            <div className="text-xs text-gray-400 mb-1">Voting Power</div>
-                                            <div className="text-sm text-gray-300 font-mono">
-                                                {formatVotingPower(validator.tokens)} WARD
-                                            </div>
-                                        </div>
-                                        
-                                        <div className="mb-3">
-                                            <div className="text-xs text-gray-400 mb-1">Signature Pattern</div>
-                                            <MobileBlockPattern 
-                                                patternWithHeights={validator.patternWithHeights}
-                                                validatorMoniker={validator.moniker}
-                                            />
-                                        </div>
-                                        
-                                        {validator.counts.unknown > 0 && (
-                                            <div className="text-xs text-gray-400">
-                                                ({validator.counts.unknown} unknown blocks)
-                                            </div>
-                                        )}
                                     </div>
-                                ))}
+                                    <div className="text-right">
+                                        <div className={`text-xl font-bold ${Number(v.uptime) >= 99 ? 'text-green-400' : Number(v.uptime) >= 90 ? 'text-yellow-400' : 'text-red-400'}`}>
+                                            {v.uptime}%
+                                        </div>
+                                        <div className="text-xs text-gray-500">Uptime (Last {v.patternWithHeights.length}/{blockRange} blocks)</div>
+                                    </div>
+                                </div>
+
+                                {v.patternWithHeights.length < blockRange && (
+                                    <div className="mb-3 bg-gray-900 rounded p-2 text-center text-xs text-gray-500">
+                                        <span className="font-semibold text-green-500">{v.patternWithHeights.length} blocks </span>
+                                        tracked (filling window...)
+                                    </div>
+                                )}
+
+                                {v.patternWithHeights.length > 0 && (
+                                    <div className="mb-3 bg-gray-900 rounded p-2 text-center">
+                                        <BlockPattern patternWithHeights={v.patternWithHeights} blockRange={blockRange} />
+                                    </div>
+                                )}
+
+                                <div className="flex justify-between text-xs text-gray-400">
+                                    <span>Missed (Window): <span className={v.counts.missed > 0 ? 'text-red-400 font-bold' : 'text-white'}>{v.counts.missed}</span></span>
+                                    <span>Signed: <span className="text-green-400 font-bold">{v.counts.signed}</span></span>
+                                </div>
+
+                                {v.signingInfo && slashingParams && (
+                                    <div className="mt-2 text-xs text-gray-400 pt-2 border-t border-gray-700">
+                                        Slashing Window ({signedBlocksWindow.toLocaleString()} Blocks):
+                                        <span className={v.signingInfo.missed_blocks_counter > 0 ? 'text-red-400 font-bold ml-1' : 'text-green-400 font-bold ml-1'}>
+                                            {v.signingInfo.missed_blocks_counter.toLocaleString()} Missed
+                                        </span>
+                                    </div>
+                                )}
                             </div>
-                        </div>
-                    ) : (
-                        <div className="text-center py-8 text-gray-400">
-                            {search ? `No validators found matching "${search}"` : 'No validators found'}
+                        ))}
+                    </div>
+
+                    {visibleCount < filteredResults.length && (
+                        <div className="text-center mt-6">
+                            <button
+                                onClick={handleLoadMore}
+                                className="bg-gray-700 hover:bg-gray-600 text-white font-medium py-2 px-6 rounded-full transition flex items-center justify-center mx-auto"
+                            >
+                                <ChevronsDown className="w-5 h-5 mr-2" />
+                                Load More ({filteredResults.length - visibleCount} remaining)
+                            </button>
                         </div>
                     )}
-                </div>
 
-                {/* Pagination Controls */}
-                {totalPages > 1 && (
-                    <div className="flex flex-col sm:flex-row justify-between items-center mt-6 space-y-4 sm:space-y-0">
-                        <div className="text-sm text-gray-400">
-                            Page {currentPage} of {totalPages}
-                        </div>
-                        
-                        <div className="flex space-x-2">
-                            <button
-                                onClick={() => handlePageChange(currentPage - 1)}
-                                disabled={currentPage === 1}
-                                className="px-3 py-1 bg-gray-700 text-white rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-600 transition duration-200 text-sm"
-                            >
-                                Previous
-                            </button>
-                            
-                            {/* Page numbers */}
-                            <div className="flex space-x-1">
-                                {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                                    let pageNum;
-                                    if (totalPages <= 5) {
-                                        pageNum = i + 1;
-                                    } else if (currentPage <= 3) {
-                                        pageNum = i + 1;
-                                    } else if (currentPage >= totalPages - 2) {
-                                        pageNum = totalPages - 4 + i;
-                                    } else {
-                                        pageNum = currentPage - 2 + i;
-                                    }
-                                    
-                                    return (
-                                        <button
-                                            key={pageNum}
-                                            onClick={() => handlePageChange(pageNum)}
-                                            className={`px-3 py-1 rounded-lg text-sm transition duration-200 ${
-                                                currentPage === pageNum
-                                                    ? 'bg-green-600 text-white'
-                                                    : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-                                            }`}
-                                        >
-                                            {pageNum}
-                                        </button>
-                                    );
-                                })}
-                            </div>
-                            
-                            <button
-                                onClick={() => handlePageChange(currentPage + 1)}
-                                disabled={currentPage === totalPages}
-                                className="px-3 py-1 bg-gray-700 text-white rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-600 transition duration-200 text-sm"
-                            >
-                                Next
-                            </button>
-                        </div>
-                        
-                        <div className="text-xs text-gray-500">
-                            {autoRefreshInterval > 0 && `Auto refresh: ${autoRefreshInterval/1000}s`}
-                        </div>
-                    </div>
-                )}
-            </div>
+                    {filteredResults.length === 0 && (
+                        <div className="col-span-full text-center py-10 text-gray-500">No validators found matching criteria.</div>
+                    )}
+                </>
+            )}
         </div>
     );
 };
+
 
 
 const App = () => {
@@ -4694,6 +4403,8 @@ const App = () => {
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
     const [isMobile, setIsMobile] = useState(false);
     const [isMainnet, setIsMainnet] = useState(true);
+    const { selectedConfig, setRpcConfig, isLoaded } = useRpcConfig();
+
 
     useEffect(() => {
         const checkMobile = () => setIsMobile(window.innerWidth < 768);
@@ -4706,35 +4417,48 @@ const App = () => {
 
     const setModal = useCallback(({ title, message }) => setModalState({ isOpen: true, title, message }), []);
     const { isDark, toggleTheme } = useTheme();
-    const { selectedConfig, setRpcConfig } = useRpcConfig();
 
     // Filter RPC configs berdasarkan network
-    const mainnetConfigs = useMemo(() => RPC_CONFIGS.filter(config => config.network === 'mainnet'), []);
-    const testnetConfigs = useMemo(() => RPC_CONFIGS.filter(config => config.network === 'testnet'), []);
+    useEffect(() => {
+        if (selectedConfig?.network) {
+            setIsMainnet(selectedConfig.network === 'mainnet');
+        }
+    }, [selectedConfig?.network]);
 
-    const currentNetworkConfigs = isMainnet ? mainnetConfigs : testnetConfigs;
+    // Filter configs
+    const currentNetworkConfigs = useMemo(() => {
+        const net = selectedConfig?.network || (isMainnet ? 'mainnet' : 'testnet');
+        return RPC_CONFIGS.filter(config => config.network === net);
+    }, [selectedConfig?.network, isMainnet]);
 
+    // Toggle network
     const toggleNetwork = useCallback(() => {
-        const newIsMainnet = !isMainnet;
-        setIsMainnet(newIsMainnet);
-
-        const targetConfigs = newIsMainnet ? mainnetConfigs : testnetConfigs;
+        const newNetwork = isMainnet ? 'testnet' : 'mainnet';
+        const targetConfigs = RPC_CONFIGS.filter(c => c.network === newNetwork);
         if (targetConfigs.length > 0) {
             setRpcConfig(targetConfigs[0]);
         }
-    }, [isMainnet, mainnetConfigs, testnetConfigs, setRpcConfig]);
+    }, [isMainnet, setRpcConfig]);
 
     const fetchStatus = useCallback(async () => {
+        if (!selectedConfig) return;
         try {
             const data = await fetchWithRetry(`${selectedConfig.COMETBFT_RPC_API}/status`, 1);
             setStatus(data.result);
             setIsRpcConnected(true);
         } catch (error) {
-            console.error('Failed to connect to RPC:', error);
+            console.error('Failed to connect to RPC:', selectedConfig.label, error);
             setIsRpcConnected(false);
             setStatus(null);
         }
     }, [selectedConfig]);
+
+    useEffect(() => {
+        if (!isLoaded || !selectedConfig) return;
+        fetchStatus();
+        const interval = setInterval(fetchStatus, 15000);
+        return () => clearInterval(interval);
+    }, [fetchStatus, isLoaded, selectedConfig]);
 
     const handleGlobalSearch = async () => {
         if (!searchQuery.trim()) {
@@ -4755,14 +4479,15 @@ const App = () => {
     const handleKeyPress = (e) => { if (e.key === 'Enter') handleGlobalSearch() };
     const handleRpcChange = (config) => { setRpcConfig(config); setIsRpcDropdownOpen(false); setStatus(null); fetchStatus(); };
 
-    useEffect(() => {
-        fetchStatus();
-        const interval = setInterval(fetchStatus, 15000);
-        return () => clearInterval(interval);
-    }, [fetchStatus]);
 
     const renderContent = useMemo(() => {
-        if (!isReady) return <div className="flex justify-center items-center h-64"><Loader message="Initializing application..." /></div>;
+        if (!isReady || !isLoaded) {
+            return (
+                <div className="flex justify-center items-center h-64">
+                    <Loader message={isLoaded ? "Initializing..." : "Loading RPC Config..."} />
+                </div>
+            );
+        }
 
         const apiProps = { cometBftRpcApi: selectedConfig.COMETBFT_RPC_API, cosmosSdkApi: selectedConfig.COSMOS_SDK_API };
         switch (currentRoute) {
@@ -4794,7 +4519,7 @@ const App = () => {
             case ROUTES.UPTIME: return <UptimeView {...apiProps} navigate={navigate} ROUTES={ROUTES} />;
             default: return <Dashboard status={status} navigate={navigate} setModal={setModal} {...apiProps} />;
         }
-    }, [currentRoute, currentParams, navigate, status, setModal, selectedConfig, isReady]);
+    }, [currentRoute, currentParams, navigate, status, setModal, selectedConfig, isReady, isLoaded]);
 
     const menuItems = useMemo(() => [
         { label: 'Dashboard', route: ROUTES.DASHBOARD, icon: LayoutDashboard },
@@ -4955,25 +4680,45 @@ const App = () => {
                                 <div className="relative">
                                     <button
                                         onClick={() => setIsRpcDropdownOpen(!isRpcDropdownOpen)}
-                                        className="flex items-center space-x-2 p-2 rounded-lg bg-gray-700 text-gray-300 hover:bg-gray-600 transition duration-200"
+                                        disabled={!isLoaded}
+                                        className={`flex items-center space-x-2 p-2 rounded-lg ${isLoaded ? 'bg-gray-700 hover:bg-gray-600 text-gray-300' : 'bg-gray-600 cursor-not-allowed'} transition duration-200`}
                                     >
-                                        <div className={`w-3 h-3 rounded-full ${isRpcConnected ? 'bg-green-500' : 'bg-red-500'}`}></div>
-                                        <span className="text-sm font-medium hidden sm:inline">{selectedConfig.label}</span>
+                                        {!isLoaded ? (
+                                            <div className="animate-spin w-4 h-4 border-2 border-green-500 border-t-transparent rounded-full"></div>
+                                        ) : (
+                                            <>
+                                                <div className={`w-3 h-3 rounded-full ${isRpcConnected ? 'bg-green-500' : 'bg-red-500'}`}></div>
+                                                <span className="text-sm font-medium hidden sm:inline">
+                                                    {selectedConfig?.label || 'Loading...'}
+                                                </span>
+                                            </>
+                                        )}
                                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                                         </svg>
                                     </button>
-                                    {isRpcDropdownOpen && (
-                                        <div className="absolute right-0 mt-2 w-64 bg-gray-800 border border-gray-700 rounded-lg shadow-xl z-50">
+                                    {isRpcDropdownOpen && isLoaded && selectedConfig && (
+                                        <div className="absolute right-0 mt-2 w-80 bg-gray-800 border border-gray-700 rounded-lg shadow-xl z-50 max-h-96 overflow-y-auto">
                                             <div className="p-2 space-y-1">
                                                 {currentNetworkConfigs.map((config, index) => (
                                                     <button
                                                         key={index}
-                                                        onClick={() => handleRpcChange(config)}
-                                                        className={`w-full text-left px-3 py-2 rounded-lg text-sm transition duration-200 ${selectedConfig.label === config.label ? 'bg-green-600 text-white' : 'text-gray-300 hover:bg-gray-700'}`}
+                                                        onClick={() => {
+                                                            handleRpcChange(config);
+                                                            setIsRpcDropdownOpen(false);
+                                                        }}
+                                                        className={`w-full text-left px-4 py-3 rounded-lg text-sm transition duration-200 flex items-center justify-between ${selectedConfig.label === config.label
+                                                            ? 'bg-green-600 text-white'
+                                                            : 'text-gray-300 hover:bg-gray-700'
+                                                            }`}
                                                     >
-                                                        <div className="font-medium">{config.label}</div>
-                                                        <div className="text-xs text-gray-400 truncate">RPC: {config.COMETBFT_RPC_API}</div>
+                                                        <div>
+                                                            <div className="font-medium">{config.label}</div>
+                                                            <div className="text-xs text-gray-400 truncate">{config.COMETBFT_RPC_API}</div>
+                                                        </div>
+                                                        {selectedConfig.label === config.label && (
+                                                            <Check className="w-4 h-4 text-green-300" />
+                                                        )}
                                                     </button>
                                                 ))}
                                             </div>
@@ -5040,7 +4785,7 @@ const App = () => {
                 {/* Footer */}
                 <footer className="mt-auto pt-6 border-t border-gray-700 text-center text-sm text-gray-500 px-6 pb-4 bg-gray-800">
                     <p>From the Warden Indonesia Community for Warden Protocol</p>
-                    <p className="mt-1">Current RPC: {selectedConfig.label} • Network: {isMainnet ? 'Mainnet' : 'Testnet'}</p>
+                    <p className="mt-1">Current RPC: {selectedConfig?.label || 'Loading...'} • Network: {isMainnet ? 'Mainnet' : 'Testnet'}</p>
                 </footer>
             </div>
         </div>
