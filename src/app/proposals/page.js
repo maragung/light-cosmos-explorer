@@ -1,172 +1,218 @@
 "use client";
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { useRouter } from 'next/navigation';
-import { fetchWithRetry } from '@/lib/utils';
+import { useParams, useRouter } from 'next/navigation';
+import { useEffect, useState } from 'react';
 import { useRpc } from '@/context/RpcContext';
+import { fetchWithRetry } from '@/lib/utils';
 import Loader from '@/components/Loader';
 
-export default function ProposalsPage() {
+// Konversi dari atto (10^-18) ke WARD
+const formatWARD = (attoStr) => {
+  if (!attoStr || attoStr === '0') return '0 WARD';
+  try {
+    const num = BigInt(attoStr);
+    const divisor = 10n ** 18n;
+    const integer = num / divisor;
+    const fractional = (num % divisor).toString().padStart(18, '0').slice(0, 4);
+    return `${integer}.${fractional} WARD`;
+  } catch (e) {
+    return `${attoStr} (invalid)`;
+  }
+};
+
+export default function ProposalDetail() {
+  const { id } = useParams();
   const router = useRouter();
   const { selectedConfig, isLoaded } = useRpc();
-  const [proposals, setProposals] = useState([]);
+  const [proposal, setProposal] = useState(null);
+  const [tally, setTally] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [currentPage, setCurrentPage] = useState(1);
-  const proposalsPerPage = 10;
-
-  const fetchProposals = useCallback(async () => {
-    if (!selectedConfig?.COSMOS_SDK_API) {
-      setError('No API endpoint configured.');
-      setLoading(false);
-      return;
-    }
-
-    setLoading(true);
-    setError(null);
-    try {
-      // ✅ Use gov/v1 — title & summary are directly available
-      const url = `${selectedConfig.COSMOS_SDK_API}/cosmos/gov/v1/proposals?pagination.limit=1000`;
-      const data = await fetchWithRetry(url);
-      const list = data.proposals || [];
-
-      // Sort by ID descending (as number)
-      const sorted = list.sort((a, b) => {
-        const idA = BigInt(a.id || 0n);
-        const idB = BigInt(b.id || 0n);
-        return idB - idA;
-      });
-
-      setProposals(sorted);
-    } catch (err) {
-      console.error('Failed to fetch proposals:', err);
-      setError('Failed to load proposals.');
-    } finally {
-      setLoading(false);
-    }
-  }, [selectedConfig]);
 
   useEffect(() => {
-    if (isLoaded) fetchProposals();
-  }, [isLoaded, fetchProposals]);
+    const fetchData = async () => {
+      if (!isLoaded || !selectedConfig?.COSMOS_SDK_API || !id) return;
 
-  // ✅ Judul asli dari gov/v1
-  const extractTitle = (p) => p.title || `Proposal #${p.id || 'Unknown'}`;
-  const extractSummary = (p) => p.summary || '';
+      setLoading(true);
+      setError(null);
+      try {
+        // Coba gunakan gov/v1 terlebih dahulu (lebih modern, data lengkap)
+        const [proposalRes, tallyRes] = await Promise.all([
+          fetchWithRetry(`${selectedConfig.COSMOS_SDK_API}/cosmos/gov/v1/proposals/${encodeURIComponent(id)}`),
+          fetchWithRetry(`${selectedConfig.COSMOS_SDK_API}/cosmos/gov/v1/proposals/${encodeURIComponent(id)}/tally`)
+        ]);
 
-  const filteredProposals = useMemo(() => {
-    if (!searchQuery.trim()) return proposals;
-    const q = searchQuery.toLowerCase();
-    return proposals.filter((p) =>
-      extractTitle(p).toLowerCase().includes(q) ||
-      extractSummary(p).toLowerCase().includes(q) ||
-      (p.id && p.id.toString().includes(q))
-    );
-  }, [proposals, searchQuery]);
+        if (!proposalRes.proposal) throw new Error('Proposal not found');
 
-  const totalPages = Math.ceil(filteredProposals.length / proposalsPerPage);
-  const startIndex = (currentPage - 1) * proposalsPerPage;
-  const currentProposals = filteredProposals.slice(startIndex, startIndex + proposalsPerPage);
+        setProposal(proposalRes.proposal);
+        setTally(tallyRes.tally);
+      } catch (err) {
+        console.error('Error fetching proposal (v1):', err);
 
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [searchQuery]);
+        // Fallback ke v1beta1 jika v1 gagal
+        try {
+          const [proposalRes, tallyRes] = await Promise.all([
+            fetchWithRetry(`${selectedConfig.COSMOS_SDK_API}/cosmos/gov/v1beta1/proposals/${encodeURIComponent(id)}`),
+            fetchWithRetry(`${selectedConfig.COSMOS_SDK_API}/cosmos/gov/v1beta1/proposals/${encodeURIComponent(id)}/tally`)
+          ]);
+
+          if (!proposalRes.proposal) throw new Error('Proposal not found in v1beta1');
+
+          setProposal(proposalRes.proposal);
+          setTally(tallyRes.tally);
+        } catch (fallbackErr) {
+          console.error('Fallback to v1beta1 also failed:', fallbackErr);
+          setError('Proposal not found or failed to load.');
+        }
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchData();
+  }, [id, isLoaded, selectedConfig]);
+
+  const getStatusLabel = (status) => {
+    switch (status) {
+      case 'PROPOSAL_STATUS_PASSED': return 'Passed';
+      case 'PROPOSAL_STATUS_REJECTED': return 'Rejected';
+      case 'PROPOSAL_STATUS_VOTING_PERIOD': return 'Voting Period';
+      case 'PROPOSAL_STATUS_DEPOSIT_PERIOD': return 'Deposit Period';
+      default: return 'Unknown';
+    }
+  };
 
   const getStatusColor = (status) => {
     switch (status) {
-      case 'PROPOSAL_STATUS_PASSED': return 'bg-green-600';
-      case 'PROPOSAL_STATUS_REJECTED': return 'bg-red-600';
-      case 'PROPOSAL_STATUS_VOTING_PERIOD': return 'bg-blue-600';
-      case 'PROPOSAL_STATUS_DEPOSIT_PERIOD': return 'bg-yellow-600';
-      default: return 'bg-gray-600';
+      case 'PROPOSAL_STATUS_PASSED': return 'text-green-400';
+      case 'PROPOSAL_STATUS_REJECTED': return 'text-red-400';
+      case 'PROPOSAL_STATUS_VOTING_PERIOD': return 'text-blue-400';
+      case 'PROPOSAL_STATUS_DEPOSIT_PERIOD': return 'text-yellow-400';
+      default: return 'text-gray-400';
     }
   };
 
-  const handleProposalClick = (id) => {
-    if (!id) return;
-    router.push(`/proposal/${encodeURIComponent(id)}`);
+  // Ambil judul & deskripsi (support v1 dan v1beta1)
+  const getTitle = () => {
+    if (!proposal) return 'Loading...';
+    // v1
+    if (proposal.title) return proposal.title;
+    // v1beta1
+    if (proposal.content?.title) return proposal.content.title;
+    if (proposal.content?.value?.title) return proposal.content.value.title;
+    return `Proposal #${proposal.proposal_id || proposal.id || id}`;
   };
 
-  if (!isLoaded) {
-    return <Loader message="Initializing..." />;
+  const getDescription = () => {
+    if (!proposal) return '';
+    // v1
+    if (proposal.summary) return proposal.summary;
+    if (proposal.description) return proposal.description;
+    // v1beta1
+    if (proposal.content?.description) return proposal.content.description;
+    if (proposal.content?.value?.description) return proposal.content.value.description;
+    return 'No description available.';
+  };
+
+  if (!isLoaded || loading) {
+    return <Loader message="Loading proposal details..." />;
+  }
+
+  if (error) {
+    return (
+      <div className="p-6 w-full">
+        <div className="bg-red-900/30 border border-red-700 rounded-lg p-6 text-red-300">
+          <p>{error}</p>
+          <button
+            onClick={() => router.push('/proposals')}
+            className="mt-4 text-green-400 hover:underline flex items-center gap-1"
+          >
+            ← Back to Proposals
+          </button>
+        </div>
+      </div>
+    );
   }
 
   return (
-    <div className="p-6 space-y-6 w-full">
-      <h2 className="text-2xl font-bold text-green-400">Governance Proposals</h2>
-
-      <div className="relative w-full">
-        <input
-          type="text"
-          placeholder="Search by title, summary, or ID..."
-          className="w-full p-4 pl-12 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-green-500"
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-        />
-        <svg className="absolute left-4 top-3.5 h-5 w-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-        </svg>
+    <div className="p-6 w-full space-y-8">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-white">Proposal #{proposal.proposal_id || proposal.id || id}</h1>
+          <h2 className="text-xl font-semibold text-green-400 mt-2">{getTitle()}</h2>
+        </div>
+        <div className="text-right">
+          <span className={`text-sm font-bold px-3 py-1 rounded-full bg-gray-800 ${getStatusColor(proposal.status)}`}>
+            {getStatusLabel(proposal.status)}
+          </span>
+        </div>
       </div>
 
-      {error && <div className="p-4 bg-red-900/30 border border-red-700 rounded text-red-300">{error}</div>}
+      {/* Description */}
+      <div className="bg-gray-800/50 p-5 rounded-xl border border-gray-700">
+        <h3 className="text-lg font-bold text-white mb-3">Description</h3>
+        <p className="text-gray-300 whitespace-pre-wrap">{getDescription()}</p>
+      </div>
 
-      {loading ? (
-        <Loader message="Loading proposals..." />
-      ) : currentProposals.length === 0 ? (
-        <p className="text-gray-400 text-center py-12">No proposals found.</p>
-      ) : (
-        <>
-          <div className="space-y-5 w-full">
-            {currentProposals.map((p) => {
-              const title = extractTitle(p);
-              const statusLabel = p.status?.replace('PROPOSAL_STATUS_', '').replace(/_/g, ' ') || 'Unknown';
-              const votingEndTime = p.voting_end_time;
-
-              return (
-                <div
-                  key={p.id}
-                  className="bg-gray-800 p-6 rounded-xl border border-gray-700 hover:border-green-500 transition cursor-pointer"
-                  onClick={() => handleProposalClick(p.id)}
-                >
-                  <div className="flex justify-between items-start mb-3">
-                    <span className="text-gray-400 font-mono text-sm">#{p.id}</span>
-                    <span className={`px-3 py-1 text-xs font-bold rounded-full text-white ${getStatusColor(p.status)}`}>
-                      {statusLabel}
-                    </span>
-                  </div>
-                  <h3 className="text-xl font-bold text-white mb-2">{title}</h3>
-                  {votingEndTime && (
-                    <div className="text-sm text-gray-400 mt-2">
-                      Voting ends: {new Date(votingEndTime).toLocaleString()}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-
-          {totalPages > 1 && (
-            <div className="flex justify-center items-center gap-3 mt-8">
-              <button
-                onClick={() => setCurrentPage((prev) => Math.max(prev - 1, 1))}
-                disabled={currentPage === 1}
-                className="px-4 py-2 bg-gray-700 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-600 text-white"
-              >
-                Previous
-              </button>
-              <span className="text-gray-300">Page {currentPage} of {totalPages}</span>
-              <button
-                onClick={() => setCurrentPage((prev) => Math.min(prev + 1, totalPages))}
-                disabled={currentPage === totalPages}
-                className="px-4 py-2 bg-gray-700 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-600 text-white"
-              >
-                Next
-              </button>
+      {/* Voting Info */}
+      {(proposal.voting_start_time || proposal.voting_end_time) && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+          {proposal.voting_start_time && (
+            <div className="bg-gray-800/50 p-4 rounded-lg">
+              <p className="text-gray-500 text-sm">Voting Starts</p>
+              <p className="text-white">{new Date(proposal.voting_start_time).toLocaleString()}</p>
             </div>
           )}
-        </>
+          {proposal.voting_end_only && (
+            <div className="bg-gray-800/50 p-4 rounded-lg">
+              <p className="text-gray-500 text-sm">Voting Ends</p>
+              <p className="text-white">{new Date(proposal.voting_end_time).toLocaleString()}</p>
+            </div>
+          )}
+          {proposal.voting_end_time && !proposal.voting_end_only && (
+            <div className="bg-gray-800/50 p-4 rounded-lg">
+              <p className="text-gray-500 text-sm">Voting Ends</p>
+              <p className="text-white">{new Date(proposal.voting_end_time).toLocaleString()}</p>
+            </div>
+          )}
+        </div>
       )}
+
+      {/* Tally */}
+      {tally && (
+        <div className="bg-gray-800/50 p-5 rounded-xl border border-gray-700">
+          <h3 className="text-lg font-bold text-white mb-4">Vote Tally</h3>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <div className="bg-gray-900/50 p-4 rounded-lg text-center">
+              <p className="text-green-400 text-sm">Yes</p>
+              <p className="text-white text-lg font-mono mt-1">{formatWARD(tally.yes_count)}</p>
+            </div>
+            <div className="bg-gray-900/50 p-4 rounded-lg text-center">
+              <p className="text-red-400 text-sm">No</p>
+              <p className="text-white text-lg font-mono mt-1">{formatWARD(tally.no_count)}</p>
+            </div>
+            <div className="bg-gray-900/50 p-4 rounded-lg text-center">
+              <p className="text-yellow-400 text-sm">Abstain</p>
+              <p className="text-white text-lg font-mono mt-1">{formatWARD(tally.abstain_count)}</p>
+            </div>
+            <div className="bg-gray-900/50 p-4 rounded-lg text-center">
+              <p className="text-purple-400 text-sm">No with Veto</p>
+              <p className="text-white text-lg font-mono mt-1">{formatWARD(tally.no_with_veto_count)}</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Back Button */}
+      <div className="pt-4">
+        <button
+          onClick={() => router.push('/proposals')}
+          className="text-green-400 hover:underline flex items-center gap-1"
+        >
+          ← Back to All Proposals
+        </button>
+      </div>
     </div>
   );
 }
